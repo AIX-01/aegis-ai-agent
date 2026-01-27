@@ -243,7 +243,9 @@ aegis-frontend/src/
 │   ├── statistics/StatisticsPageContent.tsx
 │   └── ui/                         # shadcn/ui 컴포넌트
 ├── contexts/
-│   └── AuthContext.tsx             # 전역 인증 상태
+│   ├── AuthContext.tsx             # 전역 인증 상태
+│   ├── SseContext.tsx              # 전역 SSE 연결
+│   └── WebRTCContext.tsx           # 전역 WebRTC 연결 관리
 ├── hooks/
 │   ├── use-mobile.tsx
 │   ├── use-toast.ts
@@ -1361,7 +1363,45 @@ SSE 스트림 연결 (인증 필요)
 - React Query 래퍼
 - `eventsApi.getAll()` 호출
 
-### 8.6 API 클라이언트
+### 8.6 전역 WebRTC 연결 (WebRTCContext)
+
+
+**WebRTCProvider:**
+
+- 전역 WebRTC 연결 관리 (싱글톤 패턴)
+- 페이지 이동해도 스트림 연결 유지
+- 현재 그리드에 표시된 카메라만 연결 유지
+
+
+**주요 기능:**
+
+| 기능 | 설명 |
+|------|------|
+| `connectStream(cameraId)` | WebRTC 연결 시작 |
+| `disconnectStream(cameraId)` | WebRTC 연결 종료 |
+| `setActiveGridCameras(ids)` | 현재 그리드 카메라 설정 |
+| `subscribeToStream(cameraId, callback)` | 스트림 상태 구독 |
+
+
+**스트림 상태:**
+
+| 상태 | 설명 |
+|------|------|
+| `connecting` | 연결 중 |
+| `connected` | 연결 완료 |
+| `playing` | 재생 중 |
+| `disconnected` | 연결 종료 |
+| `error` | 오류 발생 |
+
+
+**CCTVGrid 연동:**
+
+- 페이지 변경 시 `localStorage`에 현재 페이지 저장
+- 페이지 이동 후 돌아오면 이전 페이지 복원
+- `setActiveGridCameras()` 호출로 그리드 외 카메라 연결 해제
+- SSE로 카메라 변경 감지 시 자동 그리드 갱신
+
+### 8.7 API 클라이언트
 
 
 **authApi:**
