@@ -1435,8 +1435,8 @@ SSE 스트림 연결 (인증 필요)
 | getAll | 이벤트 목록 |
 | getById | 이벤트 상세 |
 | updateStatus | 상태 변경 |
-| getClipDownloadUrl | 클립 다운로드 URL |
-| getClipStreamUrl | 클립 스트리밍 URL |
+| getClipBlobUrl | 클립 Blob URL (인증 포함) |
+| downloadClip | 클립 다운로드 (인증 포함) |
 
 
 **notificationsApi:**
