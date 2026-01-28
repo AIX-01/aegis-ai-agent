@@ -8,7 +8,7 @@ import time
 from typing import List, Dict
 
 from .config import Config
-from .utils import setup_logging, setup_signal_handlers, get_camera_id
+from .utils import setup_logging, setup_signal_handlers
 from .queue_manager import QueueManager
 from .windowing import WindowManager
 from .producer import FrameProducer
@@ -49,7 +49,7 @@ class AegisAgent:
         # 동적 스트림 설정을 위한 Redis 매니저
         self.redis_manager = RedisManager(config, self._update_producers)
 
-        # 프로듀서 관리
+        # 프로듀서 관리 (카메라 별칭을 키로 사용)
         self.producers: Dict[str, FrameProducer] = {}
         self.producer_lock = threading.Lock()
         self.shutdown_event = threading.Event()
@@ -73,7 +73,7 @@ class AegisAgent:
         self.consumer_pool.start()
         self.redis_manager.start()
 
-        self.logger.info("Redis에서 초기 SRT 스트림 설정을 수행합니다...")
+        self.logger.info("Redis에서 초기 카메라 설정을 수행합니다...")
         self._update_producers()
 
         self.logger.info("시스템이 실행 중입니다. Redis 업데이트를 수신 대기합니다. 중지하려면 Ctrl+C를 누르세요.")
@@ -93,34 +93,38 @@ class AegisAgent:
 
     def _update_producers(self):
         """
-        Redis의 최신 SRT URL 목록을 기반으로 프로듀서를 업데이트하는 콜백 함수입니다.
+        Redis의 최신 카메라 목록을 기반으로 프로듀서를 업데이트하는 콜백 함수입니다.
         """
         with self.producer_lock:
-            self.logger.info("Redis 스트림 목록을 기반으로 프로듀서를 업데이트합니다...")
+            self.logger.info("Redis 카메라 목록을 기반으로 프로듀서를 업데이트합니다...")
             try:
-                target_urls = set(self.redis_manager.get_srt_urls())
-                current_urls = set(self.producers.keys())
+                # Redis에서 가져온 카메라 정보를 {alias: {name, alias}} 형태의 딕셔너리로 변환
+                target_cameras_list = self.redis_manager.get_analysis_cameras()
+                target_cameras = {cam['alias']: cam for cam in target_cameras_list}
+                
+                current_camera_aliases = set(self.producers.keys())
+                target_camera_aliases = set(target_cameras.keys())
 
-                urls_to_add = target_urls - current_urls
-                urls_to_remove = current_urls - target_urls
+                aliases_to_add = target_camera_aliases - current_camera_aliases
+                aliases_to_remove = current_camera_aliases - target_camera_aliases
 
-                for url in urls_to_add:
+                for alias in aliases_to_add:
                     if self.shutdown_event.is_set(): break
-                    camera_id = get_camera_id(url, len(self.producers))
-                    self.logger.info(f"새로운 프로듀서를 시작합니다: {url} (카메라 ID: {camera_id})")
+                    camera_info = target_cameras[alias]
+                    self.logger.info(f"새로운 프로듀서를 시작합니다: {alias} (이름: {camera_info['name']})")
                     producer = FrameProducer(
-                        camera_id=camera_id,
-                        srt_url=url,
+                        camera_name=camera_info['name'],
+                        camera_alias=alias,
                         config=self.config,
                         frame_callback=self.window_manager.add_frame,
                         shutdown_event=self.shutdown_event,
                     )
                     producer.start()
-                    self.producers[url] = producer
+                    self.producers[alias] = producer
 
-                for url in urls_to_remove:
-                    self.logger.info(f"프로듀서를 중지합니다: {url}")
-                    producer = self.producers.pop(url, None)
+                for alias in aliases_to_remove:
+                    self.logger.info(f"프로듀서를 중지합니다: {alias}")
+                    producer = self.producers.pop(alias, None)
                     if producer:
                         producer.stop()
 
