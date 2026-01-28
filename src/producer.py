@@ -1,5 +1,5 @@
 """
-SRT 스트림 프레임 추출 Producer 스레드
+RTSP 스트림 프레임 추출 Producer 스레드
 """
 import logging
 import os
@@ -15,12 +15,12 @@ from .utils import exponential_backoff
 
 
 class FrameProducer(threading.Thread):
-    """SRT 스트림에서 프레임을 추출하는 Producer 스레드"""
+    """RTSP 스트림에서 프레임을 추출하는 Producer 스레드"""
 
     def __init__(
         self,
-        camera_id: str,
-        srt_url: str,
+        camera_name: str,
+        camera_alias: str,
         config: Config,
         frame_callback,
         shutdown_event: threading.Event,
@@ -29,26 +29,27 @@ class FrameProducer(threading.Thread):
         프레임 프로듀서 초기화
 
         Args:
-            camera_id: 카메라 식별자
-            srt_url: SRT 스트림 URL
+            camera_name: 카메라 이름 (URL 생성에 사용)
+            camera_alias: 카메라 별칭 (로깅 및 식별에 사용)
             config: 시스템 설정
             frame_callback: 콜백 함수(camera_id, frame_data, timestamp)
             shutdown_event: 전체 에이전트의 종료를 알리는 이벤트
         """
         super().__init__(daemon=True)
-        self.camera_id = camera_id
-        self.srt_url = srt_url
+        self.camera_id = camera_alias  # 로깅 및 표시에 사용할 ID
+        self.camera_name = camera_name
+        self.rtsp_url = f"rtsp://{config.rtsp_host}:{config.rtsp_port}/{camera_name}"
         self.config = config
         self.frame_callback = frame_callback
         self.global_shutdown_event = shutdown_event
         self.local_shutdown_event = threading.Event() # 이 특정 프로듀서만 중지하기 위함
-        self.logger = logging.getLogger(f"aegis-agent.producer.{camera_id}")
+        self.logger = logging.getLogger(f"aegis-agent.producer.{self.camera_id}")
 
         self.capture: Optional[cv2.VideoCapture] = None
         self.reconnect_attempt = 0
         self.total_frames_captured = 0
 
-        self.is_local_file = self._is_local_file(srt_url)
+        self.is_local_file = self._is_local_file(self.rtsp_url)
         if self.is_local_file:
             self.logger.info(f"로컬 파일 모드 활성화 (반복 재생)")
 
@@ -63,18 +64,21 @@ class FrameProducer(threading.Thread):
 
     def _is_local_file(self, url: str) -> bool:
         """URL이 로컬 파일인지 확인합니다."""
-        if url.startswith(("srt://", "rtsp://", "http://", "https://")):
+        if url.startswith(("rtsp://", "http://", "https://")):
             return False
         return os.path.exists(url)
 
     def _connect(self) -> bool:
-        """SRT 스트림에 연결합니다."""
+        """RTSP 스트림에 연결합니다."""
         try:
-            self.logger.info(f"스트림에 연결 중: {self.srt_url}")
+            self.logger.info(f"스트림에 연결 중: {self.rtsp_url}")
             if self.capture is not None:
                 self.capture.release()
 
-            self.capture = cv2.VideoCapture(self.srt_url)
+            # RTSP 스트림에 대한 환경 변수 설정
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+            self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+
             if not self.capture.isOpened():
                 self.logger.error("스트림을 열지 못했습니다.")
                 return False
@@ -97,12 +101,11 @@ class FrameProducer(threading.Thread):
         """종료 신호를 확인하며 지수 백오프로 재연결합니다."""
         delay = exponential_backoff(
             self.reconnect_attempt,
-            self.config.srt_reconnect_delay,
-            self.config.srt_max_reconnect_delay,
+            self.config.reconnect_delay,
+            self.config.max_reconnect_delay,
         )
         self.logger.warning(f"{delay:.1f}초 후 재연결합니다 (시도 {self.reconnect_attempt + 1})...")
         
-        # 지연 시간 동안 대기하지만, 주기적으로 종료 신호를 확인합니다
         wait_start = time.time()
         while time.time() - wait_start < delay:
             if self._should_shutdown():
@@ -132,7 +135,7 @@ class FrameProducer(threading.Thread):
 
     def run(self):
         """메인 프로듀서 루프."""
-        self.logger.info(f"{self.camera_id}의 프로듀서를 시작합니다")
+        self.logger.info(f"'{self.camera_id}'의 프로듀서를 시작합니다")
 
         while not self._should_shutdown():
             if self._connect():
@@ -181,4 +184,4 @@ class FrameProducer(threading.Thread):
 
         if self.capture:
             self.capture.release()
-        self.logger.info(f"{self.camera_id}의 프로듀서가 중지되었습니다. 총 프레임: {self.total_frames_captured}")
+        self.logger.info(f"'{self.camera_id}'의 프로듀서가 중지되었습니다. 총 프레임: {self.total_frames_captured}")

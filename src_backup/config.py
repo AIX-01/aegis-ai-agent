@@ -1,5 +1,5 @@
 """
-AEGIS AI 에이전트 설정 모듈
+AEGIS AI Agent 설정 모듈
 """
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -9,8 +9,9 @@ from typing import List, Optional
 class Config:
     """시스템 설정"""
 
-    # SRT URL (이제 커맨드 라인이 아닌 Redis에서 로드)
-    srt_urls: List[str] = field(default_factory=list)
+    # RTSP 스트림 호스트 및 포트
+    rtsp_host: str = "localhost"
+    rtsp_port: int = 8554
 
     # Consumer 설정
     num_workers: int = 4
@@ -60,17 +61,17 @@ class Config:
     precision_max_retries: int = 3
     precision_retry_delay: float = 1.0
 
-    # SRT 재연결
-    srt_reconnect_delay: float = 2.0  # 초, 지수 백오프 기반
-    srt_max_reconnect_delay: float = 60.0  # 초
+    # 스트림 재연결
+    reconnect_delay: float = 2.0  # 초, 지수 백오프 기반
+    max_reconnect_delay: float = 60.0  # 초
 
     # Redis 설정
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_db: int = 0
     redis_password: Optional[str] = None
-    redis_srt_list_key: str = "aegis:srt_urls"  # SRT URL의 JSON 인코딩 리스트 키
-    redis_update_channel: str = "aegis:srt_urls:update"  # 업데이트 알림을 수신할 채널
+    redis_analysis_cameras_key: str = "analysis:cameras"
+    redis_update_channel: str = "camera:analysis:update"
 
 
 # 프레임 추출 상수
@@ -80,4 +81,4 @@ FRAME_CAPTURE_INTERVAL = 1.0  # 초 (1 FPS)
 TASK_KEYS = ['camera_id', 'low_res_frames', 'high_res_frames', 'timestamp', 'window_start', 'window_end']
 
 # VLM 트리거 조건
-TRIGGER_CATEGORIES = ['abnormal', 'suspicious', '이상', '의심']
+TRIGGER_CATEGORIES = ['abnormal', '이상']
