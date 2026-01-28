@@ -100,10 +100,11 @@ flowchart LR
 
 ### WebRTC 스트리밍
 
-1. 브라우저 → Spring Boot: `POST /api/cameras/{id}/stream` → 토큰 발급
-2. 브라우저 → Caddy → MediaMTX: `POST /stream/{cam}/whep?token=xxx`
-3. MediaMTX → Spring Boot: `POST /internal/mediamtx/auth` → 토큰 검증
-4. 브라우저 ↔ MediaMTX: UDP ICE 직접 연결 (DTLS 암호화)
+1. 브라우저 → Spring Boot: `GET /api/cameras` → 카메라 목록 + streamUrl 반환
+2. 브라우저 → MediaMTX: `POST /stream/{cam}/whep` + `Authorization: Basic base64(_:jwt)`
+3. MediaMTX → Spring Boot: `POST /internal/mediamtx/auth` (password=jwt)
+4. Spring Boot: JWT 검증 → 카메라 접근 권한 확인
+5. 브라우저 ↔ MediaMTX: UDP ICE 직접 연결 (DTLS 암호화)
 
 ### 카메라 동기화
 
@@ -112,15 +113,16 @@ flowchart LR
 3. MediaMTX → Spring Boot: `POST /internal/mediamtx/sync`
 4. Spring Boot → MediaMTX: `GET /v3/paths/list`
 5. Spring Boot → PostgreSQL: 카메라 INSERT/UPDATE
-6. Spring Boot → 브라우저: SSE `camera` 이벤트
-7. Spring Boot → Redis: Pub/Sub `camera:analysis:update`
+6. Spring Boot → Redis: 분석 카메라 목록 저장 (`analysis:cameras`)
+7. Spring Boot → Redis: Pub/Sub `camera:analysis:update` 발행
+8. Spring Boot → 브라우저: SSE `camera` 이벤트
 
 ### AI 분석
 
-1. MediaMTX → Python Agent: `POST /frame/{cameraName}` (1fps JPEG)
-2. Agent: Redis `camera:analysis:update` 채널 구독
-3. Agent → Spring Boot: `GET /internal/agent/cameras/analysis`
-4. Agent: 분석 대상 카메라 프레임 버퍼링 (8장)
+1. Agent: Redis `camera:analysis:update` 채널 구독
+2. Agent: Redis에서 분석 카메라 목록 조회 (`GET analysis:cameras`)
+3. Agent: RTSP로 MediaMTX에 직접 연결 (`rtsp://mediamtx:8554/{cam}`)
+4. Agent: 1fps 캡처, 640x360 리사이즈, 8프레임 버퍼링
 5. Agent: AI 분석 수행
 6. Agent → Spring Boot: `POST /internal/agent/events` → Event (클립 자동 추출 포함)
 7. Agent → Spring Boot: `PATCH /internal/agent/events/{id}/analysis`
@@ -188,14 +190,13 @@ flowchart LR
 
 **runOnReady (스트림 시작 시):**
 
-1. `curl -X POST /internal/mediamtx/sync` (동기화 트리거)
-2. FFmpeg 루프: 1fps 프레임 추출 → Agent 전송
-   - `ffmpeg -i rtsp://localhost:8554/$MTX_PATH -vframes 1 ...`
-   - `curl -X POST $AGENT_URL/frame/$MTX_PATH`
+- `curl -X POST /internal/mediamtx/sync` (동기화 트리거)
 
 **runOnNotReady (스트림 종료 시):**
 
 - `curl -X POST /internal/mediamtx/sync` (동기화 트리거)
+
+> Python Agent는 Redis Pub/Sub로 알림을 받아 RTSP로 직접 캡처합니다.
 
 ### WebRTC 설정
 
