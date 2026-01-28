@@ -16,10 +16,10 @@ erDiagram
 
     users {
         uuid id PK
-        string email UK
-        string password
-        string name
-        enum role
+        varchar email
+        varchar password
+        varchar name
+        user_role role
         boolean approved
         boolean deleted
         timestamp deleted_at
@@ -29,8 +29,8 @@ erDiagram
 
     cameras {
         uuid id PK
-        string name UK
-        string alias
+        varchar name
+        varchar alias
         boolean connected
         boolean enabled
         boolean analysis_enabled
@@ -39,19 +39,20 @@ erDiagram
     }
 
     user_cameras {
-        uuid user_id PK_FK
-        uuid camera_id PK_FK
+        uuid id PK
+        uuid user_id FK
+        uuid camera_id FK
     }
 
     events {
         uuid id PK
         uuid camera_id FK
-        enum type
+        event_type type
         timestamp timestamp
-        enum status
+        event_status status
         text description
         text agent_action
-        string clip_url
+        varchar clip_url
         text summary
         text analysis_report
         timestamp created_at
@@ -62,13 +63,86 @@ erDiagram
         uuid id PK
         uuid user_id FK
         uuid event_id FK
-        enum type
-        string title
+        notification_type type
+        varchar title
         text message
         boolean read
         timestamp created_at
     }
 ```
+
+---
+
+## 테이블 상세
+
+### users
+
+| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
+|------|------|------|----------|--------|
+| id | uuid | NO | PK | auto |
+| email | varchar(255) | NO | UNIQUE | - |
+| password | varchar(255) | NO | - | - |
+| name | varchar(100) | NO | - | - |
+| role | user_role | NO | - | USER |
+| approved | boolean | NO | - | false |
+| deleted | boolean | NO | - | false |
+| deleted_at | timestamp | YES | - | - |
+| created_at | timestamp | NO | - | auto |
+| updated_at | timestamp | NO | - | auto |
+
+### cameras
+
+| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
+|------|------|------|----------|--------|
+| id | uuid | NO | PK | auto |
+| name | varchar(50) | NO | UNIQUE | - |
+| alias | varchar(100) | NO | - | =name |
+| connected | boolean | NO | - | false |
+| enabled | boolean | NO | - | false |
+| analysis_enabled | boolean | NO | - | false |
+| created_at | timestamp | NO | - | auto |
+| updated_at | timestamp | NO | - | auto |
+
+### user_cameras
+
+| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
+|------|------|------|----------|--------|
+| id | uuid | NO | PK | auto |
+| user_id | uuid | NO | FK(users.id), UK | - |
+| camera_id | uuid | NO | FK(cameras.id), UK | - |
+
+> UK: user_id + camera_id 조합에 대한 유니크 제약조건
+
+### events
+
+| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
+|------|------|------|----------|--------|
+| id | uuid | NO | PK | auto |
+| camera_id | uuid | NO | FK(cameras.id) | - |
+| type | event_type | NO | - | - |
+| timestamp | timestamp | NO | - | - |
+| status | event_status | NO | - | PROCESSING |
+| description | text | NO | - | - |
+| agent_action | text | YES | - | - |
+| clip_url | varchar(500) | YES | - | - |
+| summary | text | YES | - | - |
+| analysis_report | text | YES | - | - |
+| created_at | timestamp | NO | - | auto |
+| updated_at | timestamp | NO | - | auto |
+
+### notifications
+
+| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
+|------|------|------|----------|--------|
+| id | uuid | NO | PK | auto |
+| user_id | uuid | NO | FK(users.id) | - |
+| event_id | uuid | YES | FK(events.id) | - |
+| type | notification_type | NO | - | - |
+| title | varchar(200) | NO | - | - |
+| message | text | NO | - | - |
+| read | boolean | NO | - | false |
+| created_at | timestamp | NO | - | auto |
+
 
 ---
 
@@ -121,6 +195,12 @@ erDiagram
 - `idx_cameras_connected` (connected)
 - `idx_cameras_enabled` (enabled)
 - `idx_cameras_analysis_enabled` (analysis_enabled)
+
+### user_cameras
+
+- `uk_user_cameras_user_camera` UNIQUE (user_id, camera_id)
+- `idx_user_cameras_user_id` (user_id)
+- `idx_user_cameras_camera_id` (camera_id)
 
 ### events
 
