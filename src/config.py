@@ -10,17 +10,19 @@ class Config:
     """시스템 설정"""
 
     # RTSP 스트림 호스트 및 포트
-    rtsp_host: str = "localhost"
+    rtsp_host: str = "127.0.0.1"  # localhost 대신 IP 직접 사용
     rtsp_port: int = 8554
 
     # Consumer 설정
     num_workers: int = 4
 
     # VLM 트리거 엔드포인트
-    vlm_endpoint: str = "http://localhost:8000/analyze"
+    # [실제 운영 시 변경] 실제 VLM 서버 주소 (예: "http://192.168.1.100:8000/analyze")
+    vlm_endpoint: str = "http://localhost:8001/analyze"
 
     # 정밀 분석 엔드포인트
-    precision_endpoint: str = "http://localhost:8000/precision_analyze"
+    # [실제 운영 시 변경] 실제 정밀 분석 서버 주소
+    precision_endpoint: str = "http://localhost:8002/precision_analyze"
 
     # VLM용 저해상도 프레임 설정
     frame_width: int = 640
@@ -45,7 +47,8 @@ class Config:
     buffer_timeout: int = 60  # 초 - VLM 응답 대기 타임아웃
 
     # Mock 서버
-    mock_mode: bool = False
+    # [실제 운영 시 변경] False로 설정하여 실제 서버와 통신
+    mock_mode: bool = True
     mock_vlm_port: int = 8001  # VLM 트리거 서버 포트
     mock_precision_port: int = 8002  # 정밀 분석 서버 포트
 

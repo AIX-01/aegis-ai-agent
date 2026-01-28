@@ -75,7 +75,7 @@ class FrameProducer(threading.Thread):
             if self.capture is not None:
                 self.capture.release()
 
-            # RTSP 스트림에 대한 환경 변수 설정
+            # [수정] RTSP 스트림에 TCP 프로토콜을 사용하도록 환경 변수 설정
             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
             self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
 

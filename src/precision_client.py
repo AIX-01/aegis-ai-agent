@@ -87,7 +87,7 @@ class PrecisionClient:
                     f"[성공] 정밀 분석 완료 - "
                     f"카메라: {camera_id}, "
                     f"윈도우: {task_metadata.get('window_start', 0)}-"
-                    f"{task_metadata.get('window_end', 0)}s"
+                    f"{task_metadata.get('window_end', 0)}"
                 )
 
                 return result

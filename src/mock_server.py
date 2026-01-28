@@ -3,7 +3,7 @@
 """
 import logging
 import random
-from typing import List
+from typing import List, Union
 from fastapi import FastAPI
 from pydantic import BaseModel
 import uvicorn
@@ -19,8 +19,8 @@ class VLMAnalysisRequest(BaseModel):
     frames: List[str]  # base64 인코딩 (저해상도)
     num_frames: int
     timestamp: str
-    window_start: int
-    window_end: int
+    window_start: Union[int, str]
+    window_end: Union[int, str]
 
 
 class VLMAnalysisResponse(BaseModel):
@@ -45,8 +45,8 @@ class PrecisionAnalysisRequest(BaseModel):
     frames: List[str]  # base64 인코딩 (고해상도)
     num_frames: int
     timestamp: str
-    window_start: int
-    window_end: int
+    window_start: Union[int, str]
+    window_end: Union[int, str]
     vlm_result: dict  # VLM 메타데이터
 
 
@@ -262,7 +262,7 @@ class MockPrecisionServer:
                 f"[정밀 분석 결과]\n"
                 f"카메라: {request.camera_id}\n"
                 f"VLM 트리거: {vlm_primary.upper()}/{vlm_secondary} (신뢰도: {vlm_confidence:.2f})\n"
-                f"윈도우: {request.window_start}-{request.window_end}s\n"
+                f"윈도우: {request.window_start}-{request.window_end}\n"
                 f"분석된 프레임: {request.num_frames} (고해상도: {total_bytes / 1024 / 1024:.2f} MB)\n"
                 f"---\n"
                 f"분석 결과: {detailed_analysis}\n"

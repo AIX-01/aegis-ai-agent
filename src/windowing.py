@@ -117,14 +117,18 @@ class WindowManager:
             frames = list(buffer)[-self.config.window_size :]
 
             # 작업 생성 (이중 해상도 분리)
+            frame_timestamps = [ts for _, _, ts in frames]
+            start_time_str = frame_timestamps[0].strftime("%H:%M:%S")
+            end_time_str = frame_timestamps[-1].strftime("%H:%M:%S")
+
             task = {
                 "camera_id": camera_id,
                 "low_res_frames": [low_res for low_res, _, _ in frames],  # VLM용
                 "high_res_frames": [high_res for _, high_res, _ in frames],  # 정밀 분석용
                 "timestamp": datetime.now(),
-                "window_start": 0,  # 초 단위의 상대 시간
-                "window_end": self.config.window_size,
-                "frame_timestamps": [ts for _, _, ts in frames],
+                "window_start": start_time_str,
+                "window_end": end_time_str,
+                "frame_timestamps": frame_timestamps,
             }
 
             # 작업 큐에 추가

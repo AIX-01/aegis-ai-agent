@@ -73,7 +73,7 @@ class VLMClient:
                 self.logger.debug(
                     f"VLM 분석 성공: {camera_id} "
                     f"(윈도우 {task_metadata.get('window_start', 0)}-"
-                    f"{task_metadata.get('window_end', 0)}s)"
+                    f"{task_metadata.get('window_end', 0)})"
                 )
 
                 return result
