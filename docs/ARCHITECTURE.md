@@ -75,8 +75,8 @@ flowchart LR
 | SRT | 8890/udp | 원격 MTX에서 스트림 수신 |
 | WebRTC WHEP | 8889 | 시그널링 |
 | WebRTC ICE | 8189/udp | 미디어 |
-| HLS | 8888 | 클립 추출, 웹 재생 |
-| RTSP | 8554 | 내부 스트림 재생 (FFmpeg 소스) |
+| HLS | 8888 | Spring 클립 추출용 (내부) |
+| RTSP | 8554 | Python Agent 프레임 캡처용 (내부) |
 | API | 9997 | 카메라 목록 조회 |
 
 ---
@@ -121,7 +121,7 @@ flowchart LR
 
 1. Agent: Redis `camera:analysis:update` 채널 구독
 2. Agent: Redis에서 분석 카메라 목록 조회 (`GET analysis:cameras`)
-3. Agent: RTSP로 MediaMTX에 직접 연결 (`rtsp://mediamtx:8554/{cam}`)
+3. Agent: RTSP로 MediaMTX에 직접 연결 (`rtsp://localhost:8554/{cam}`, 인증 없음)
 4. Agent: 1fps 캡처, 640x360 리사이즈, 8프레임 버퍼링
 5. Agent: AI 분석 수행
 6. Agent → Spring Boot: `POST /internal/agent/events` → Event (클립 자동 추출 포함)
@@ -162,29 +162,52 @@ flowchart LR
 
 ## MediaMTX 설정
 
-### HLS 녹화
+### HLS 클립 추출 설정
 
 | 설정 | 값 | 설명 |
 |------|-----|------|
 | hlsSegmentCount | 10 | 유지 세그먼트 수 |
 | hlsSegmentDuration | 3s | 세그먼트 길이 |
-| hlsPartDuration | 200ms | LL-HLS 파트 길이 |
 | hlsSegmentMaxSize | 50M | 세그먼트 최대 크기 |
 | hlsDirectory | /recordings | 저장 경로 |
+| hlsVariant | fmp4 | Fragmented MP4 (FFmpeg 변환 용이) |
 
-→ 3초 × 10개 = 최근 30초 보관
+→ 3초 × 10개 = 최근 30초 보관 (Spring에서 이벤트 발생 시 클립 추출)
 
 ### 인증
 
-**송출 인증 (authInternalUsers):**
+모든 인증을 Spring Boot로 위임하여 통합 관리합니다.
 
-| 사용자 | 비밀번호 | 권한 |
-|--------|----------|------|
-| aegis | trillion | publish, read, playback |
+**MediaMTX → Spring 인증 요청:**
 
-**시청 인증 (authHTTPAddress):**
+```
+POST /internal/mediamtx/auth
+Content-Type: application/json
 
-- `POST http://host.docker.internal:8080/internal/mediamtx/auth`
+{
+  "user": "사용자명",
+  "password": "비밀번호 또는 JWT",
+  "action": "publish | read",
+  "path": "카메라 경로",
+  "protocol": "srt | rtsp | hls | webrtc"
+}
+```
+
+**프로토콜별 인증 처리:**
+
+| 프로토콜 | action | 인증 방식 | 설명 |
+|----------|--------|----------|------|
+| SRT | publish | ID/PW | 환경변수 `MEDIAMTX_SRT_USER`, `MEDIAMTX_SRT_PASSWORD` |
+| RTSP | read | 없음 | Python Agent 프레임 캡처용 (내부) |
+| HLS | read | 없음 | Spring 클립 추출용 (내부) |
+| WebRTC | read | JWT | Basic Auth password 필드에 JWT 전달 |
+
+**SRT 인증 환경변수:**
+
+| 환경변수 | 기본값 | 설명 |
+|----------|--------|------|
+| MEDIAMTX_SRT_USER | aegis | SRT 송출 사용자명 |
+| MEDIAMTX_SRT_PASSWORD | trillion | SRT 송출 비밀번호 |
 
 ### 스트림 훅
 
@@ -196,7 +219,6 @@ flowchart LR
 
 - `curl -X POST /internal/mediamtx/sync` (동기화 트리거)
 
-> Python Agent는 Redis Pub/Sub로 알림을 받아 RTSP로 직접 캡처합니다.
 
 ### WebRTC 설정
 
