@@ -142,14 +142,14 @@ erDiagram
 | 키 패턴 | 값 | TTL |
 |---------|----|----|
 | `refresh_token:{token}` | userId | 7일 |
-| `stream_token:{token}` | userId:cameraId | 30초 |
 | `mediamtx:sync:lock` | "locked" | 1초 |
+| `analysis:cameras` | JSON: [{name, alias}, ...] | 없음 |
 
 ### Pub/Sub 채널
 
 | 채널 | 메시지 | 구독자 |
 |------|--------|--------|
-| `camera:analysis:update` | "update" | Python Agent |
+| `camera:analysis:update` | "sync" | Python Agent |
 
 ---
 
