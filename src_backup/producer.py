@@ -63,7 +63,11 @@ class FrameProducer(threading.Thread):
         return self.global_shutdown_event.is_set() or self.local_shutdown_event.is_set()
 
     def _is_local_file(self, url: str) -> bool:
-        """URL이 로컬 파일인지 확인합니다."""
+        """
+        URL이 로컬 파일인지 네트워크 스트림인지 확인합니다.
+        - 네트워크 스트림(RTSP, HTTP 등)은 재생 종료 시 재연결을 시도합니다.
+        - 로컬 파일은 재생 종료 시 처음부터 다시 반복 재생합니다. (테스트 및 데모용)
+        """
         if url.startswith(("rtsp://", "http://", "https://")):
             return False
         return os.path.exists(url)
@@ -75,7 +79,7 @@ class FrameProducer(threading.Thread):
             if self.capture is not None:
                 self.capture.release()
 
-            # RTSP 스트림에 대한 환경 변수 설정
+            # [수정] RTSP 스트림에 TCP 프로토콜을 사용하도록 환경 변수 설정
             os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
             self.capture = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
 
@@ -119,16 +123,12 @@ class FrameProducer(threading.Thread):
             else:
                 self.logger.error("재연결 실패, 다시 시도합니다...")
 
-    def _preprocess_frame(self, frame: np.ndarray) -> Optional[tuple]:
-        """프레임 전처리: 저해상도(VLM용) + 고해상도(정밀 분석용) 버전을 생성합니다."""
+    def _preprocess_frame(self, frame: np.ndarray) -> Optional[bytes]:
+        """프레임 전처리: 저해상도(VLM용) 버전을 생성합니다."""
         try:
             low_res = cv2.resize(frame, (self.config.frame_width, self.config.frame_height), interpolation=cv2.INTER_LINEAR)
             _, encoded_low = cv2.imencode(".jpg", low_res, [int(cv2.IMWRITE_JPEG_QUALITY), self.config.jpeg_quality])
-
-            high_res = cv2.resize(frame, (self.config.precision_frame_width, self.config.precision_frame_height), interpolation=cv2.INTER_LINEAR)
-            _, encoded_high = cv2.imencode(".jpg", high_res, [int(cv2.IMWRITE_JPEG_QUALITY), self.config.precision_jpeg_quality])
-
-            return (encoded_low.tobytes(), encoded_high.tobytes())
+            return encoded_low.tobytes()
         except Exception as e:
             self.logger.error(f"프레임 전처리 중 오류 발생: {e}", exc_info=True)
             return None
@@ -166,12 +166,11 @@ class FrameProducer(threading.Thread):
                     last_capture_time = time.time()
                     continue
 
-                frame_data = self._preprocess_frame(frame)
-                if frame_data is None:
+                low_res_frame = self._preprocess_frame(frame)
+                if low_res_frame is None:
                     continue
 
-                low_res_frame, high_res_frame = frame_data
-                self.frame_callback(self.camera_id, low_res_frame, high_res_frame, datetime.now())
+                self.frame_callback(self.camera_id, low_res_frame, datetime.now())
                 self.total_frames_captured += 1
                 last_capture_time = current_time
 

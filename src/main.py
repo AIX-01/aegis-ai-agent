@@ -15,6 +15,7 @@ from .producer import FrameProducer
 from .vlm_client import VLMClient
 from .consumer import ConsumerPool
 from .precision_client import PrecisionClient
+from .backend_client import BackendClient
 from .mock_server import MockVLMServer, MockPrecisionServer
 from .redis_manager import RedisManager
 
@@ -37,6 +38,7 @@ class AegisAgent:
         self.window_manager = WindowManager(config, self.queue_manager)
         self.vlm_client = VLMClient(config)
         self.precision_client = PrecisionClient(config)
+        self.backend_client = BackendClient(config) # 백엔드 클라이언트 추가
 
         # 간소화된 파이프라인을 사용하는 컨슈머 풀
         self.consumer_pool = ConsumerPool(
@@ -44,6 +46,7 @@ class AegisAgent:
             queue_manager=self.queue_manager,
             vlm_client=self.vlm_client,
             precision_client=self.precision_client,
+            backend_client=self.backend_client, # 컨슈머에 백엔드 클라이언트 주입
         )
 
         # 동적 스트림 설정을 위한 Redis 매니저

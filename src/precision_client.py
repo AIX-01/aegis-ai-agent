@@ -38,16 +38,16 @@ class PrecisionClient:
     def send_for_analysis(
         self,
         camera_id: str,
-        high_res_frames: List[bytes],
+        frames: List[bytes],
         vlm_metadata: Dict[str, Any],
         task_metadata: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
         """
-        고해상도 프레임을 정밀 분석 API로 전송
+        프레임을 정밀 분석 API로 전송
 
         Args:
             camera_id: 카메라 식별자
-            high_res_frames: 고해상도 JPEG 프레임 바이트 리스트
+            frames: JPEG 프레임 바이트 리스트 (VLM용 저해상도 프레임 사용)
             vlm_metadata: VLM 분석 결과 메타데이터
             task_metadata: 추가 작업 정보
 
@@ -58,11 +58,11 @@ class PrecisionClient:
 
         # 페이로드 준비
         payload = self._prepare_payload(
-            camera_id, high_res_frames, vlm_metadata, task_metadata
+            camera_id, frames, vlm_metadata, task_metadata
         )
 
         # 전송 데이터 크기 계산
-        frame_bytes = sum(len(frame) for frame in high_res_frames)
+        frame_bytes = sum(len(frame) for frame in frames)
         self.total_bytes_sent += frame_bytes
 
         # 재시도 루프
@@ -142,7 +142,7 @@ class PrecisionClient:
 
         Args:
             camera_id: 카메라 식별자
-            frames: 고해상도 JPEG 프레임 바이트 리스트
+            frames: JPEG 프레임 바이트 리스트
             vlm_metadata: VLM 결과 메타데이터
             task_metadata: 작업 메타데이터
 
