@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional
 import requests
 from requests.exceptions import RequestException, Timeout
 
-from .utils import exponential_backoff
+from ..utils import exponential_backoff
 
 
 class PrecisionClient:

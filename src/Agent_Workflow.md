@@ -14,6 +14,73 @@
 
 ---
 
+## 🚀 실행 모드 설정
+
+에이전트는 **모의(Mock) 서버 모드**와 **실제(Real) 서버 모드** 두 가지로 실행할 수 있습니다. `src/config.py` 파일의 설정을 변경하여 모드를 전환합니다.
+
+### 1. 모의(Mock) 서버 모드 (개발 및 테스트용)
+
+외부 AI/백엔드 서버 없이 에이전트의 전체 파이프라인 동작을 테스트하기 위한 모드입니다.
+
+#### ⚙️ 설정 방법
+1.  `src/config.py` 파일을 엽니다.
+2.  `mock_mode` 값을 `True`로 설정합니다.
+
+    ```python
+    # config.py
+    @dataclass
+    class Config:
+        # ...
+        # Mock 서버
+        mock_mode: bool = True  # <--- 이 값을 True로 설정
+        # ...
+    ```
+
+#### ✅ 동작 방식
+- `app.py` 실행 시, 에이전트가 자체적으로 VLM과 정밀 분석 서버를 흉내 내는 **모의 서버를 함께 실행**합니다.
+- 에이전트는 `localhost`의 모의 서버와 통신하며, 모의 서버는 무작위로 분석 결과를 생성하여 반환합니다.
+- 실제 AI 모델 없이도 LangGraph의 조건부 분기를 포함한 전체 워크플로우를 테스트할 수 있습니다.
+
+### 2. 실제(Real) 서버 모드 (통합 및 운영용)
+
+실제 VLM, LLM, 백엔드 서버와 연동하여 시스템 전체를 운영할 때 사용합니다.
+
+#### ⚙️ 설정 방법
+1.  `src/config.py` 파일을 엽니다.
+2.  `mock_mode` 값을 `False`로 변경합니다.
+3.  **각 실제 서버의 주소에 맞게 엔드포인트(endpoint) 설정을 모두 수정합니다.**
+
+    ```python
+    # config.py
+    @dataclass
+    class Config:
+        # ...
+        # 실제 서버 주소로 변경
+        vlm_endpoint: str = "http://<실제 VLM 서버 IP>:8001/analyze"
+        precision_endpoint: str = "http://<실제 LLM 서버 IP>:8002/precision_analyze"
+        backend_endpoint: str = "http://<실제 백엔드 서버 IP>:8080/api/vlm-results"
+        # ...
+        # Mock 서버 비활성화
+        mock_mode: bool = False  # <--- 이 값을 False로 설정
+        # ...
+    ```
+
+#### ✅ 동작 방식
+- `app.py` 실행 시, `mock_mode`가 `False`이므로 모의 서버를 실행하지 않습니다.
+- 에이전트는 `config.py`에 설정된 **실제 서버 주소**로 HTTP 요청을 보냅니다.
+
+### 실행 전 공통 준비 사항
+어떤 모드로 실행하든 아래 사항은 준비되어야 합니다.
+1.  **Redis 서버**: `config.py`에 설정된 주소에서 실행 중이어야 합니다.
+2.  **Redis 데이터**: `redis-cli`를 사용하여 분석할 카메라 정보를 `analysis:cameras` 키에 등록해야 합니다.
+    ```sh
+    # 예시: streamid가 local_video인 카메라 정보 등록
+    SADD analysis:cameras '{"id": "local_video", "name": "Test Cam", "location": "Office"}'
+    ```
+3.  **영상 소스**: Redis에 등록한 `camera_id`에 해당하는 RTSP 스트림 또는 로컬 비디오 파일이 필요합니다.
+
+---
+
 ## 🔄 상세 워크플로우 (Workflow)
 
 시스템의 전체 동작 흐름은 크게 **실시간 영상 처리**와 **LangGraph 분석/추론** 두 단계로 나뉩니다.

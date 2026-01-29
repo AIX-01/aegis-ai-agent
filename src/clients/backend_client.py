@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 import requests
 from requests.exceptions import RequestException, Timeout
 
-from .utils import exponential_backoff
+from ..utils import exponential_backoff
 
 
 class BackendClient:
@@ -87,6 +87,58 @@ class BackendClient:
 
         self.logger.error(f"🚫 [백엔드 전송 최종 실패] {camera_id}의 VLM 결과 전송에 실패했습니다.")
         return None
+
+    def update_event(
+        self,
+        event_id: str,
+        detail_result: Dict[str, Any]
+    ) -> bool:
+        """
+        상세 분석 결과로 기존 이벤트를 갱신합니다.
+
+        Args:
+            event_id: 갱신할 이벤트 ID
+            detail_result: 상세 분석 결과 (eventType, summary, riskScore 등)
+
+        Returns:
+            성공 여부
+        """
+        # 엔드포인트가 /api/vlm-results 라고 가정하면, 업데이트는 /api/vlm-results/{event_id} 또는 별도 엔드포인트일 수 있음
+        # 여기서는 동일한 엔드포인트에 PUT 요청을 보내거나, event_id를 포함하여 POST를 보내는 것으로 가정
+        # 백엔드 구현에 따라 수정 필요. 일단 event_id를 URL 경로에 추가하여 PUT 요청을 보내는 방식으로 구현
+        
+        # endpoint가 http://.../api/vlm-results 라면 http://.../api/vlm-results/{event_id} 로 요청
+        update_endpoint = f"{self.endpoint}/{event_id}"
+        
+        payload = {
+            "eventId": event_id,
+            "eventType": detail_result.get("event_type"),
+            "summary": detail_result.get("summary"),
+            "riskScore": detail_result.get("risk_score"),
+            # 필요한 경우 추가 필드
+        }
+
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.put(
+                    update_endpoint,
+                    json=payload,
+                    timeout=self.timeout,
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+                
+                self.logger.info(f"[백엔드 갱신 성공] Event ID: {event_id}")
+                return True
+
+            except Exception as e:
+                self.logger.warning(
+                    f"❌ [백엔드 갱신 실패] Event ID {event_id}: {e}, 시도: {attempt + 1}/{self.max_retries}"
+                )
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay)
+
+        return False
 
     def _prepare_payload(
         self,

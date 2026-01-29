@@ -8,7 +8,8 @@ from typing import List, Dict, Any, Optional
 import requests
 from requests.exceptions import RequestException, Timeout
 
-from .utils import exponential_backoff
+# utils가 src/utils.py에 위치하므로 상위 디렉토리에서 import
+from ..utils import exponential_backoff
 
 
 class VLMClient:

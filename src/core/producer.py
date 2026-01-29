@@ -10,8 +10,8 @@ import cv2
 import numpy as np
 from datetime import datetime
 
-from .config import Config
-from .utils import exponential_backoff
+from ..config import Config
+from ..utils import exponential_backoff
 
 
 class FrameProducer(threading.Thread):

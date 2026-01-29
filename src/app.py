@@ -1,5 +1,5 @@
 """
-AEGIS AI Agent의 메인 진입점 - 간소화된 트리거 분석 파이프라인
+AEGIS AI Agent의 메인 진입점 - LangGraph 기반 분석 파이프라인
 """
 import argparse
 import sys
@@ -9,19 +9,16 @@ from typing import List, Dict
 
 from .config import Config
 from .utils import setup_logging, setup_signal_handlers
-from .queue_manager import QueueManager
-from .windowing import WindowManager
-from .producer import FrameProducer
-from .vlm_client import VLMClient
-from .consumer import ConsumerPool
-from .precision_client import PrecisionClient
-from .backend_client import BackendClient
-from .mock_server import MockVLMServer, MockPrecisionServer
-from .redis_manager import RedisManager
+from .core.queue_manager import QueueManager
+from .core.windowing import WindowManager
+from .core.producer import FrameProducer
+from .core.consumer import ConsumerPool
+from .core.redis_manager import RedisManager
+from .api.mock_server import MockVLMServer, MockPrecisionServer
 
 
 class AegisAgent:
-    """AEGIS AI Agent의 메인 오케스트레이터 - 간소화된 파이프라인"""
+    """AEGIS AI Agent의 메인 오케스트레이터 - LangGraph 파이프라인"""
 
     def __init__(self, config: Config):
         """
@@ -36,17 +33,11 @@ class AegisAgent:
         # 핵심 컴포넌트
         self.queue_manager = QueueManager(max_size=config.queue_max_size)
         self.window_manager = WindowManager(config, self.queue_manager)
-        self.vlm_client = VLMClient(config)
-        self.precision_client = PrecisionClient(config)
-        self.backend_client = BackendClient(config) # 백엔드 클라이언트 추가
-
-        # 간소화된 파이프라인을 사용하는 컨슈머 풀
+        
+        # LangGraph 기반 컨슈머 풀
         self.consumer_pool = ConsumerPool(
             config=config,
             queue_manager=self.queue_manager,
-            vlm_client=self.vlm_client,
-            precision_client=self.precision_client,
-            backend_client=self.backend_client, # 컨슈머에 백엔드 클라이언트 주입
         )
 
         # 동적 스트림 설정을 위한 Redis 매니저
@@ -67,7 +58,7 @@ class AegisAgent:
     def start(self):
         """모든 컴포넌트를 시작합니다."""
         self.logger.info("=" * 80)
-        self.logger.info("AEGIS AI Agent - 간소화된 트리거 분석 파이프라인")
+        self.logger.info("AEGIS AI Agent - LangGraph 기반 분석 파이프라인")
         self.logger.info("=" * 80)
 
         if self.config.mock_mode:
@@ -181,7 +172,7 @@ class AegisAgent:
 
 def parse_args():
     """커맨드 라인 인자를 파싱합니다."""
-    parser = argparse.ArgumentParser(description="AEGIS AI Agent - 간소화된 파이프라인")
+    parser = argparse.ArgumentParser(description="AEGIS AI Agent - LangGraph 기반 분석 파이프라인")
     parser.add_argument("--workers", type=int, help="컨슈머 워커 스레드 수")
     # CLI에서 오버라이드해야 하는 다른 관련 인자를 Config에서 추가
     parser.add_argument("--mock", action="store_true", help="모의 서버 활성화")
