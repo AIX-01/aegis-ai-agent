@@ -5,7 +5,7 @@ import logging
 import os
 import threading
 import time
-from typing import Optional
+from typing import Optional, Dict
 import cv2
 import numpy as np
 from datetime import datetime
@@ -19,8 +19,7 @@ class FrameProducer(threading.Thread):
 
     def __init__(
         self,
-        camera_name: str,
-        camera_alias: str,
+        camera_info: Dict,
         config: Config,
         frame_callback,
         shutdown_event: threading.Event,
@@ -29,16 +28,16 @@ class FrameProducer(threading.Thread):
         프레임 프로듀서 초기화
 
         Args:
-            camera_name: 카메라 이름 (URL 생성에 사용)
-            camera_alias: 카메라 별칭 (로깅 및 식별에 사용)
+            camera_info: 카메라 정보 딕셔너리 ({id, name, location})
             config: 시스템 설정
-            frame_callback: 콜백 함수(camera_id, frame_data, timestamp)
+            frame_callback: 콜백 함수(camera_info, frame_data, timestamp)
             shutdown_event: 전체 에이전트의 종료를 알리는 이벤트
         """
         super().__init__(daemon=True)
-        self.camera_id = camera_alias  # 로깅 및 표시에 사용할 ID
-        self.camera_name = camera_name
-        self.rtsp_url = f"rtsp://{config.rtsp_host}:{config.rtsp_port}/{camera_name}"
+        self.camera_info = camera_info
+        self.camera_id = camera_info.get('id', 'unknown')
+        self.camera_name = camera_info.get('name', 'unknown')
+        self.rtsp_url = f"rtsp://{config.rtsp_host}:{config.rtsp_port}/{self.camera_id}"
         self.config = config
         self.frame_callback = frame_callback
         self.global_shutdown_event = shutdown_event
@@ -135,7 +134,7 @@ class FrameProducer(threading.Thread):
 
     def run(self):
         """메인 프로듀서 루프."""
-        self.logger.info(f"'{self.camera_id}'의 프로듀서를 시작합니다")
+        self.logger.info(f"'{self.camera_name}' ({self.camera_id})의 프로듀서를 시작합니다")
 
         while not self._should_shutdown():
             if self._connect():
@@ -170,7 +169,7 @@ class FrameProducer(threading.Thread):
                 if low_res_frame is None:
                     continue
 
-                self.frame_callback(self.camera_id, low_res_frame, datetime.now())
+                self.frame_callback(self.camera_info, low_res_frame, datetime.now())
                 self.total_frames_captured += 1
                 last_capture_time = current_time
 
@@ -183,4 +182,4 @@ class FrameProducer(threading.Thread):
 
         if self.capture:
             self.capture.release()
-        self.logger.info(f"'{self.camera_id}'의 프로듀서가 중지되었습니다. 총 프레임: {self.total_frames_captured}")
+        self.logger.info(f"'{self.camera_name}' ({self.camera_id})의 프로듀서가 중지되었습니다. 총 프레임: {self.total_frames_captured}")

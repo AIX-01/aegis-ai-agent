@@ -52,7 +52,7 @@ class AegisAgent:
         # 동적 스트림 설정을 위한 Redis 매니저
         self.redis_manager = RedisManager(config, self._update_producers)
 
-        # 프로듀서 관리 (카메라 별칭을 키로 사용)
+        # 프로듀서 관리 (카메라 ID를 키로 사용)
         self.producers: Dict[str, FrameProducer] = {}
         self.producer_lock = threading.Lock()
         self.shutdown_event = threading.Event()
@@ -101,33 +101,32 @@ class AegisAgent:
         with self.producer_lock:
             self.logger.info("Redis 카메라 목록을 기반으로 프로듀서를 업데이트합니다...")
             try:
-                # Redis에서 가져온 카메라 정보를 {alias: {name, alias}} 형태의 딕셔너리로 변환
+                # Redis에서 가져온 카메라 정보를 {id: {id, name, location}} 형태의 딕셔너리로 변환
                 target_cameras_list = self.redis_manager.get_analysis_cameras()
-                target_cameras = {cam['alias']: cam for cam in target_cameras_list}
+                target_cameras = {cam['id']: cam for cam in target_cameras_list if 'id' in cam}
                 
-                current_camera_aliases = set(self.producers.keys())
-                target_camera_aliases = set(target_cameras.keys())
+                current_camera_ids = set(self.producers.keys())
+                target_camera_ids = set(target_cameras.keys())
 
-                aliases_to_add = target_camera_aliases - current_camera_aliases
-                aliases_to_remove = current_camera_aliases - target_camera_aliases
+                ids_to_add = target_camera_ids - current_camera_ids
+                ids_to_remove = current_camera_ids - target_camera_ids
 
-                for alias in aliases_to_add:
+                for cam_id in ids_to_add:
                     if self.shutdown_event.is_set(): break
-                    camera_info = target_cameras[alias]
-                    self.logger.info(f"새로운 프로듀서를 시작합니다: {alias} (이름: {camera_info['name']})")
+                    camera_info = target_cameras[cam_id]
+                    self.logger.info(f"새로운 프로듀서를 시작합니다: {cam_id} (이름: {camera_info.get('name', 'unknown')})")
                     producer = FrameProducer(
-                        camera_name=camera_info['name'],
-                        camera_alias=alias,
+                        camera_info=camera_info,
                         config=self.config,
                         frame_callback=self.window_manager.add_frame,
                         shutdown_event=self.shutdown_event,
                     )
                     producer.start()
-                    self.producers[alias] = producer
+                    self.producers[cam_id] = producer
 
-                for alias in aliases_to_remove:
-                    self.logger.info(f"프로듀서를 중지합니다: {alias}")
-                    producer = self.producers.pop(alias, None)
+                for cam_id in ids_to_remove:
+                    self.logger.info(f"프로듀서를 중지합니다: {cam_id}")
+                    producer = self.producers.pop(cam_id, None)
                     if producer:
                         producer.stop()
 

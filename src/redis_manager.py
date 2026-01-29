@@ -53,8 +53,8 @@ class RedisManager:
 
     def get_analysis_cameras(self) -> List[Dict]:
         """
-        설정된 Redis 키에서 분석 대상 카메라 목록을 가져옵니다.
-        값은 [{name, alias}, ...] 형태의 JSON 문자열입니다.
+        설정된 Redis 키(Set)에서 분석 대상 카메라 목록을 가져옵니다.
+        각 멤버는 {id, name, location} 형태의 JSON 문자열입니다.
 
         Returns:
             카메라 정보를 담은 딕셔너리 목록 또는 오류 발생 시 빈 목록.
@@ -63,21 +63,30 @@ class RedisManager:
             self.logger.warning("Redis에 연결되지 않았습니다. 카메라 정보를 가져올 수 없습니다.")
             return []
         try:
-            cameras_json = self.redis_client.get(self.analysis_cameras_key)
-            if not cameras_json:
+            # Redis Set에서 모든 멤버 가져오기
+            camera_members = self.redis_client.smembers(self.analysis_cameras_key)
+            if not camera_members:
                 self.logger.warning(f"Redis 키 '{self.analysis_cameras_key}'가 비어있거나 존재하지 않습니다.")
                 return []
 
-            cameras = json.loads(cameras_json)
-            if not isinstance(cameras, list):
-                self.logger.error(f"Redis 키 '{self.analysis_cameras_key}'의 데이터가 리스트가 아닙니다.")
-                return []
+            cameras = []
+            for member in camera_members:
+                try:
+                    camera_data = json.loads(member)
+                    if isinstance(camera_data, dict):
+                        # 필수 필드 확인 (선택 사항)
+                        if 'id' in camera_data:
+                            cameras.append(camera_data)
+                        else:
+                            self.logger.warning(f"카메라 데이터에 'id' 필드가 없습니다: {camera_data}")
+                    else:
+                        self.logger.warning(f"잘못된 카메라 데이터 형식 (dict가 아님): {member}")
+                except json.JSONDecodeError:
+                    self.logger.error(f"카메라 데이터 JSON 디코딩 실패: {member}")
 
             self.logger.info(f"Redis에서 {len(cameras)}개의 카메라 정보를 가져왔습니다.")
             return cameras
-        except json.JSONDecodeError:
-            self.logger.error(f"Redis 키 '{self.analysis_cameras_key}'에서 JSON 디코딩에 실패했습니다.")
-            return []
+
         except Exception as e:
             self.logger.error(f"Redis에서 카메라 정보를 가져오는 중 오류 발생: {e}", exc_info=True)
             return []

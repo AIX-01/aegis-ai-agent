@@ -1,941 +1,264 @@
 # AEGIS AI Agent
 
-**Simplified Triggered Analytics Pipeline - 간소화된 조건부 분석 시스템**
+**LangGraph-based Triggered Analytics Pipeline - LangGraph 기반 조건부 분석 시스템**
 
-외부 관리 서버(예: Spring Boot)가 Redis에 등록한 카메라 목록을 동적으로 관리하며, VLM 분석 결과를 백엔드로 전송하고 **이벤트 ID**를 받아, '이상' 조건 충족 시에만 해당 **이벤트 ID와 저해상도 프레임**을 정밀 분석 API로 즉시 전송하는 경량화된 파이프라인 시스템입니다.
+**스프링부트 백엔드**가 Redis에 등록한 카메라 목록을 동적으로 관리하며, 실시간 영상 프레임을 **LangGraph 기반 파이프라인**으로 처리하여 VLM 분석, 백엔드 보고, 조건부 정밀 분석(LLM) 및 다단계 추론을 수행하는 시스템입니다.
 
 ## 🎯 시스템 개요
 
-### 간소화된 파이프라인 아키텍처
-```
-1단계 [VLM 분석]  → 저해상도 → VLM 분석 ┐
-                                    ├→ 모든 VLM 결과 백엔드 전송 ┬→ 이벤트 ID 수신
-                                    └→ '이상' 판정 ┐             ┘
-                                                 ↓ (조건 충족)
-2단계 [정밀 분석] → 저해상도 + 이벤트 ID → 정밀 API 즉시 전송 → 상세 분석
-```
-
 ### 핵심 개념
-- **VLM 결과 전송 및 이벤트 ID 수신**: 모든 VLM 분석 결과(정상, 이상 등)를 실시간으로 백엔드 서버에 전송하고, 고유한 **이벤트 ID(Event ID)**를 응답받습니다.
-- **조건부 정밀 분석**: VLM이 "이상(abnormal)" 카테고리를 반환할 경우에만, 2단계 정밀 분석을 진행하여 자원을 효율적으로 사용합니다. 이때, 이전에 발급받은 **이벤트 ID**를 함께 전송하여 분석 결과를 연결합니다.
-- **Redis 동적 스트림 관리**: 에이전트 재시작 없이 외부 관리 서버가 Redis의 설정을 변경하는 것만으로 분석할 카메라 스트림을 실시간으로 추가하거나 제거할 수 있습니다.
-
-## 주요 기능
-
-### 🎯 핵심 기능
-- **VLM 결과 백엔드 전송 및 이벤트 ID 수신**: 모든 1차 분석 결과를 지정된 백엔드 서버로 전송하고, 고유 식별자인 **이벤트 ID**를 돌려받습니다.
-- **조건부 2단계 파이프라인**: VLM 분석 후 '이상' 조건 충족 시에만, **이벤트 ID**와 함께 정밀 분석으로 전환됩니다.
-- **Redis 동적 스트림 관리**: Redis Pub/Sub을 통해 카메라 목록을 실시간으로 갱신하고 비디오 처리 스레드(Producer)를 동적으로 제어합니다.
-- **슬라이딩 윈도우**: 여러 프레임을 하나의 분석 단위(윈도우)로 묶어 처리합니다.
-  - **윈도우 크기**: 8초
-  - **슬라이딩 간격**: 4초 (50% 오버랩)
-
-### 🛡️ 안정성 기능
-- **자동 재연결**: 스트림 또는 외부 서버(VLM, 백엔드 등) 연결 실패 시 지수 백오프(exponential backoff)를 통해 자동으로 재연결을 시도합니다.
-- **큐 오버플로우 보호**: 작업 큐가 가득 차면 새로운 작업을 추가하지 않아 시스템 과부하를 방지합니다.
-- **버퍼 타임아웃 및 강제 처리**: 특정 시간(기본 30초) 동안 새 프레임이 수신되지 않으면, 버퍼에 쌓인 불완전한 프레임 묶음(최소 5개 이상)을 강제로 분석 큐에 보내 처리합니다.
-- **그레이스풀 셧다운**: 시스템 종료 신호(Ctrl+C) 수신 시 모든 컴포넌트를 안전하게 종료합니다.
+- **하이브리드 아키텍처**: 고성능이 필수적인 실시간 영상 처리(프레임 캡처, 윈도우 관리)는 기존 Python 스레딩 방식을 유지하고, 복잡한 분석 및 추론 로직은 **LangGraph**를 사용해 명확하고 확장 가능하게 모델링합니다.
+- **상태 기반 워크플로우**: 모든 분석 과정은 `AnalysisState`라는 중앙 상태 객체를 통해 데이터를 주고받습니다. 각 분석 단계(노드)는 이 상태를 업데이트하며 다음 단계로 전달합니다.
+- **조건부 다단계 추론**: VLM 1차 분석에서 '이상'이 감지되면, 정밀 분석(LLM), 최종 보고서 생성 등 LangGraph로 정의된 다단계 추론 그래프가 순차적으로 실행됩니다.
+- **Redis 동적 스트림 관리**: 에이전트 재시작 없이 **스프링부트 백엔드**가 Redis 설정을 변경하여 분석 대상 카메라를 실시간으로 제어합니다.
 
 ---
 
-## 아키텍처
+## 🔄 상세 워크플로우 (Workflow)
 
-### 🎯 명확한 경계 구분: 일반 Python vs LangGraph
+시스템의 전체 동작 흐름은 크게 **실시간 영상 처리**와 **LangGraph 분석/추론** 두 단계로 나뉩니다.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  일반 Python (기존 유지) - 1~8단계                                    │
-│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│                                                                     │
-│  ┌────────────┐   ┌────────────┐   ┌────────────┐                 │
-│  │ Producer   │   │  Window    │   │   Queue    │                 │
-│  │ (CV2/RTSP) │──▶│  Manager   │──▶│  Manager   │                 │
-│  │            │   │ (버퍼 생성)  │   │            │                 │
-│  └────────────┘   └────────────┘   └────────────┘                 │
-│       │                 │                 │                        │
-│       │                 │                 │                        │
-│       └─────────────────┴─────────────────┘                        │
-│                         ▼                                          │
-│                  ┌────────────┐                                    │
-│                  │ Consumer   │ ◀─── 스레드 풀에서 작업 가져옴       │
-│                  │ 워커 스레드  │                                   │
-│                  └────────────┘                                    │
-│                         │                                          │
-└─────────────────────────┼──────────────────────────────────────────┘
-                          │
-                          ▼ task = queue.get()
-┌─────────────────────────┼──────────────────────────────────────────┐
-│  🤖 LangGraph (새로 작성) - 9~14단계                                  │
-│  ━━━━━━━━━━━━━━━━━━━━━━▼━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
-│                                                                     │
-│            graph.invoke({                                          │
-│                camera_id: task['camera_id'],                       │
-│                frames: task['low_res_frames']                      │
-│            })                                                       │
-│                         │                                          │
-│                         ▼                                          │
-│            ┌──────────────────────────┐                            │
-│            │   vlm_analysis_node      │ ◀─── VLM API 호출          │
-│            └──────────────────────────┘                            │
-│                         │                                          │
-│                         ▼                                          │
-│            ┌──────────────────────────┐                            │
-│            │   backend_report_node    │ ◀─── 백엔드 전송            │
-│            └──────────────────────────┘                            │
-│                         │                                          │
-│                         ▼                                          │
-│            ┌──────────────────────────┐                            │
-│            │   conditional_router     │ ◀─── 조건 분기 (이상 여부)   │
-│            └──────────────────────────┘                            │
-│                    /          \                                    │
-│                   /            \                                   │
-│         [정상]   /              \  [이상]                            │
-│                 /                \                                 │
-│                ▼                  ▼                                │
-│            ┌────┐    ┌──────────────────────────┐                 │
-│            │END │    │  precision_agent_node    │ ◀─── LLM 에이전트│
-│            └────┘    │  (LLM 기반 의사결정 +    │                  │
-│                      │   정밀 분석 API 호출)     │                  │
-│                      └──────────────────────────┘                  │
-│                                  │                                 │
-│                                  ▼                                 │
-│                              ┌────┐                                │
-│                              │END │                                │
-│                              └────┘                                │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### 아키텍처 다이어그램 (Architecture Diagram)
+### 1. 개요 다이어그램 (Simple Workflow)
+전체적인 처리 단계의 흐름을 간략하게 보여줍니다.
 
 ```mermaid
 graph TD
-    subgraph Ext["외부 시스템"]
-        S["External Manager<br>(e.g., Spring Boot)"]
-        VLM["VLM 서버 (1단계)"]
-        Backend["백엔드 서버<br>(VLM 결과 수신)"]
-        Precision["정밀 분석 서버 (2단계)"]
+    subgraph RealTime["[1단계] 실시간 영상 처리"]
+        P["Producer"] --> W["Window Manager"]
+        W --> Q["작업 큐"]
+        Q --> C["Consumer"]
     end
 
-    subgraph Agent["AEGIS 에이전트"]
-        subgraph Traditional["🔧 일반 Python 파이프라인 (1-8단계)"]
-            subgraph Redis["Redis (데이터 저장소 & 메시지 브로커)"]
-                R["analysis:cameras<br>(Camera List)"]
-                U["camera:analysis:update<br>(Pub/Sub Channel)"]
-            end
-            
-            RM["Redis Manager"]
-            P["Producer Pool<br>(CV2/RTSP)"]
-            WM["Window Manager<br>(버퍼 관리)"]
-            Q["작업 큐"]
-        end
+    subgraph LangGraph["[2단계] LangGraph 분석/추론"]
+        C --> |"Graph.invoke()"| Start(▶ Start)
+        Start --> N1["VLM 1차 분석"]
+        N1 --> N2["1차 백엔드 보고"]
+        N2 --> Router{"조건부 분기"}
         
-        subgraph LangGraph["🤖 LangGraph 파이프라인 (9-14단계)"]
-            C["Consumer Pool<br>↓<br>Analysis Graph"]
-            Decision{"트리거 조건 판단<br>'이상'인가?"}
-            C_Normal("작업 종료")
-            C_Abnormal["정밀 분석 에이전트"]
-        end
+        Router -- "정상" --> End(⏹️ End)
+        Router -- "의심" --> N_Verify["검증 노드"]
+        Router -- "이상" --> N_Precise["정밀 분석 (LLM)"]
 
-        S -- "1. 카메라 목록 업데이트" --> R
-        S -- "2. 업데이트 알림" --> U
+        N_Verify --> Router2{"재분기"}
+        Router2 -- "정상" --> End
+        Router2 -- "이상" --> N_Precise
 
-        U -- "3. 알림 구독" --> RM
-        RM -- "4. 카메라 목록 요청" --> R
-        
-        RM -- "5. Producer 동적 관리" --> P
-        P -- "6. 프레임 캡처" --> WM
-        WM -- "7. 윈도우 생성" --> Q
-        Q -- "8. 작업 수신" --> C
+        N_Precise --> N_Update["상세 결과 백엔드 갱신"]
+        N_Update --> N7["최종 보고서 생성<br>(작업 예정)"]
+        N7 --> End
     end
-    
-    C -- "9. VLM 분석 요청" --> VLM
-    VLM -- "10. VLM 분석 결과 수신" --> C
-    C -- "11. VLM 결과 전송" --> Backend
-    Backend -- "12. 이벤트 ID 응답" --> C
-    C -- "13. 트리거 조건 판단" --> Decision
-    Decision -- "No (정상 또는 의심)<br>14a." --> C_Normal
-    Decision -- "Yes (이상)<br>14b." --> C_Abnormal
-    C_Abnormal -- "이벤트 ID와 함께<br>정밀 분석 요청" --> Precision
 ```
 
-### 워크플로우 설명
+### 2. 상세 다이어그램 (Detailed Workflow with Data Flow)
+각 단계에서 어떤 데이터가 생성되고 전달되는지를 상세하게 보여줍니다.
 
-**🔧 일반 Python 파이프라인 (1-8단계):**
-1.  **카메라 목록 업데이트**: 외부 관리 서버가 Redis의 `analysis:cameras` 키에 분석할 카메라 목록을 저장합니다.
-2.  **업데이트 알림**: 관리 서버는 목록 업데이트 후, `camera:analysis:update` 채널에 알림 메시지를 게시합니다.
-3.  **알림 구독**: `Redis Manager`는 `camera:analysis:update` 채널을 구독하고 있다가 알림을 수신합니다.
-4.  **카메라 목록 조회**: 알림을 받으면, `Redis Manager`는 Redis에서 최신 카메라 목록을 다시 조회합니다.
-5.  **Producer 동적 관리**: `Redis Manager`는 조회한 목록을 기반으로 `Producer` 스레드를 동적으로 관리합니다.
-6.  **프레임 캡처**: 각 `Producer`는 담당 스트림에서 프레임을 캡처하여 저해상도로 리사이즈합니다. (CV2 사용)
-7.  **윈도우 생성**: `Window Manager`는 프레임들을 모아 분석 단위인 '윈도우'를 생성합니다. (타임아웃 시 강제 처리 기능 포함)
-8.  **작업 수신**: `Consumer` 스레드가 `작업 큐`에서 작업을 가져옵니다.
+> **범례**: ⬜ 처리 단계(Process) | 🟦 데이터 객체(Data) | 🟧 외부 시스템(External)
 
-**🤖 LangGraph 파이프라인 (9-14단계):**
-9.  **VLM 분석 요청**: `Consumer`는 저해상도 프레임들을 `VLM 서버`로 보내 1차 분석을 요청합니다.
-10. **VLM 결과 수신**: `VLM 서버`로부터 '정상', '의심', '이상' 등의 분석 결과를 받습니다.
-11. **백엔드 전송**: `Consumer`는 수신한 **모든 VLM 분석 결과**를 `백엔드 서버`로 전송합니다.
-12. **이벤트 ID 수신**: 백엔드 서버로부터 해당 분석 건에 대한 고유 **이벤트 ID**를 응답받습니다.
-13. **분기 처리**: `Consumer`는 VLM 결과가 설정된 트리거 조건(예: 'abnormal', '이상')에 해당하는지 확인합니다.
-14. **조건부 정밀 분석**:
-    *   **정상 또는 의심일 경우 (14a)**: 정밀 분석 없이 작업을 종료합니다.
-    *   **이상일 경우 (14b)**: 발급받은 **이벤트 ID**와 함께 `정밀 분석 서버`로 2차 분석을 요청합니다.
+```mermaid
+graph TD
+    %% 다크 테마 스타일 정의
+    classDef proc fill:#2d2d2d,stroke:#9e9e9e,stroke-width:2px,color:#ffffff;
+    classDef data fill:#1a237e,stroke:#5c6bc0,stroke-width:2px,stroke-dasharray: 5 5,color:#ffffff;
+    classDef ext fill:#3e2723,stroke:#ffab91,stroke-width:2px,color:#ffffff;
+    classDef router fill:#004d40,stroke:#4db6ac,stroke-width:2px,color:#ffffff;
+
+    subgraph RealTime["[1단계] 동적 설정 및 실시간 영상 처리 (core)"]
+        direction TB
+        ExtMgr["스프링부트 백엔드"]:::ext
+        RedisCam[("Redis<br>analysis:cameras")]:::ext
+        RedisCh[("Redis<br>camera:analysis:update")]:::ext
+        
+        ExtMgr -.-> D_CamInfo[("Camera Info<br>• camera_id<br>• camera_name<br>• location")]:::data
+        D_CamInfo -.-> RedisCam
+        
+        ExtMgr -.-> D_Noti[("Notification<br>'update'")]:::data
+        D_Noti -.-> RedisCh
+        
+        RedisCh -.-> RM["RedisManager"]:::proc
+        RM -.-> RedisCam
+        
+        RM --> P["Producer Pool"]:::proc
+        P --> D_Frames[("Raw Frames<br>[JPEG Bytes...]")]:::data
+        D_Frames --> W["Window Manager"]:::proc
+        
+        W --> D_Window[("Window Data<br>• Frames (List)<br>• Camera Info (id, name, loc)<br>• Time (start, end)")]:::data
+        D_Window --> Q["작업 큐"]:::proc
+        Q --> C["Consumer"]:::proc
+    end
+
+    subgraph LangGraph["[2단계] LangGraph 분석 및 다단계 추론 (graph)"]
+        direction TB
+        C --> D_State[("AnalysisState 초기화<br>• Frames<br>• Camera Info<br>• Occurred At")]:::data
+        D_State --> N1["10. VLM 1차 분석"]:::proc
+        
+        N1 --> D_Risk[("Risk Level<br>(NORMAL / SUSPICIOUS / ABNORMAL)")]:::data
+        D_Risk --> N2["11. 1차 백엔드 보고"]:::proc
+        
+        N2 -.-> D_Req1[("Request<br>• camera_id<br>• risk_level<br>• occurred_at")]:::data
+        D_Req1 -.-> Backend["스프링부트 백엔드"]:::ext
+        Backend -.-> D_Res1[("Response<br>• event_id")]:::data
+        D_Res1 -.-> N2
+        
+        N2 --> Router{"12. 조건부 분기"}:::router
+        
+        Router -- "NORMAL" --> End(⏹️ End)
+        Router -- "SUSPICIOUS" --> N_Verify["13. 검증 노드"]:::proc
+        Router -- "ABNORMAL" --> N_Precise["14. 정밀 분석 (LLM)"]:::proc
+
+        N_Verify --> Router2{"13a. 재분기"}:::router
+        Router2 -- "NORMAL" --> End
+        Router2 -- "ABNORMAL" --> N_Precise
+
+        N_Precise --> D_Detail[("상세 분석 결과<br>• EventType (폭행, 침입 등)<br>• Summary (상황 요약)<br>• RiskScore (0.0~1.0)")]:::data
+        D_Detail --> N_Update["15. 상세 결과 백엔드 갱신"]:::proc
+        
+        N_Update -.-> D_Req2[("Request<br>• event_id<br>• event_type<br>• summary<br>• risk_score")]:::data
+        D_Req2 -.-> Backend
+        
+        N_Update --> N7["16. 최종 보고서 생성<br>(작업 예정)"]:::proc
+        N7 --> End
+    end
+```
+
+### [1단계] 동적 설정 및 실시간 영상 처리 (`core` 패키지)
+고성능 처리를 위해 일반적인 Python 멀티스레딩 방식으로 동작하며, `core` 패키지의 모듈들이 담당합니다.
+
+1.  **카메라 정보 변경 (스프링부트 백엔드)**: 백엔드에서 관리자가 분석할 카메라 정보를 Redis의 `analysis:cameras` 키(Set 자료구조)에 업데이트합니다. 각 카메라는 `camera_id`, `camera_name`, `camera_location` 등의 정보를 포함할 수 있습니다.
+2.  **변경 알림 발행 (스프링부트 백엔드)**: 정보 업데이트 후, 백엔드는 Redis의 `camera:analysis:update` 채널에 "update"와 같은 메시지를 **발행(Publish)**합니다.
+3.  **알림 수신 (`RedisManager`)**: 에이전트의 `RedisManager`는 항상 `camera:analysis:update` 채널을 **구독(Subscribe)**하고 있다가, 메시지가 들어오면 즉시 감지합니다.
+4.  **카메라 목록 동기화 (`RedisManager`)**: 알림을 수신한 `RedisManager`는 Redis의 `analysis:cameras` 키에서 최신 카메라 정보 목록을 다시 가져옵니다.
+5.  **프로듀서 동적 관리 (`RedisManager` -> `ProducerPool`)**: `RedisManager`는 현재 실행 중인 `Producer` 스레드 목록과 새로 가져온 카메라 목록을 비교하여, 더 이상 목록에 없는 카메라는 `Producer`를 중지시키고, 새로 추가된 카메라는 새로운 `Producer`를 시작합니다.
+6.  **프레임 캡처 및 리사이징 (`Producer`)**: 각 `Producer` 스레드는 담당하는 RTSP 스트림에서 프레임을 지속적으로 캡처하고, 분석에 적합한 저해상도 이미지로 변환합니다.
+7.  **윈도우 구성 (`WindowManager`)**: `Producer`가 전달한 프레임들을 시간 순서대로 수집하여, **8초 길이의 프레임 묶음(윈도우)**을 생성합니다. (슬라이딩 간격: 4초)
+8.  **작업 생성 및 큐잉 (`WindowManager` -> `QueueManager`)**: 생성된 윈도우(프레임 묶음)와 메타데이터(카메라 정보, 윈도우 시작/종료 시간)를 하나의 '작업(task)'으로 만들어 `QueueManager`의 작업 큐에 추가합니다.
+
+### [2단계] LangGraph 분석 및 다단계 추론 (`graph` 패키지)
+`Consumer`가 큐에서 작업을 가져오면서 복잡한 의사결정과 추론을 담당하는 LangGraph 파이프라인이 시작됩니다.
+
+9.  **그래프 실행 (`Consumer`)**: 대기 중이던 `Consumer` 스레드가 큐에서 작업을 가져옵니다. 작업 정보를 바탕으로 `AnalysisState` 초기 상태를 구성하고, `graph.invoke()`를 호출하여 그래프를 실행합니다.
+10. **1차 VLM 분석 (노드: `vlm_analysis`)**:
+    *   `vlm_client`를 사용하여 VLM 서버에 프레임 묶음을 전송합니다.
+    *   결과로 `risk_level` ('NORMAL', 'SUSPICIOUS', 'ABNORMAL')을 도출하여 `AnalysisState`에 저장합니다.
+11. **1차 백엔드 보고 (노드: `backend_report`)**:
+    *   `backend_client`를 사용하여 1차 분석 결과(`camera_id`, `risk_level`, `occurred_at`)를 **스프링부트 백엔드**로 전송합니다.
+    *   백엔드로부터 고유한 **`event_id`**를 응답받아 `AnalysisState`에 저장합니다.
+12. **조건부 분기 (엣지: `router`)**:
+    *   `AnalysisState`의 `risk_level`을 확인하여 다음 경로를 결정합니다.
+        *   **'NORMAL'**: 분석할 필요가 없으므로 워크플로우를 즉시 종료합니다.
+        *   **'SUSPICIOUS'**: 추가적인 검증이 필요하므로 '검증' 노드로 분기합니다.
+        *   **'ABNORMAL'**: 명백한 이상 상황이므로 '정밀 분석 (LLM)' 노드로 즉시 분기합니다.
+13. **검증 (노드: `verification`)** (SUSPICIOUS 경로):
+    *   '의심' 상황에 대한 추가적인 판단을 수행하여 `risk_level`을 'NORMAL' 또는 'ABNORMAL'로 재설정하고, 재분기합니다.
+14. **정밀 분석 (LLM) (노드: `precision_analysis`)**:
+    *   `precision_client`를 사용하여 정밀 분석 서버에 프레임 묶음과 `event_id`를 전송합니다.
+    *   LLM을 통해 구체적인 **`event_type`**, **`summary`**, **`risk_score`** 등을 한 번에 분석하여 `AnalysisState`에 저장합니다.
+15. **상세 결과 백엔드 갱신 (노드: `update_backend`)**:
+    *   `backend_client`를 사용하여 `event_id`와 함께 상세 분석 결과(`event_type`, `summary`, `risk_score`)를 **스프링부트 백엔드**로 전송합니다.
+    *   백엔드는 이 정보로 기존 이벤트를 **덮어쓰기(갱신)**합니다.
+16. **최종 보고서 생성 (노드: `generate_report`) - (작업 예정)**:
+    *   **RAG(검색 증강 생성)** 기능을 수행하는 LLM 에이전트로 구성될 예정입니다.
+    *   LLM이 모든 분석 결과와 `retrieval` 도구를 통해 얻은 정보(대응 매뉴얼 등)를 종합하여 최종 상세 보고서를 작성하고, `AnalysisState`의 `report` 필드를 업데이트할 것입니다.
+17. **워크플로우 종료 (END)**: 모든 분석이 완료된 최종 `AnalysisState`를 반환하며 그래프 실행이 종료됩니다.
 
 ---
 
-## 🏗️ LangGraph 도입 방식 비교
+## 🤖 LangGraph 파이프라인 상태
 
-### 방식 1️⃣: 전체 시스템을 LangGraph로 만들기
+### `src/graph/state.py`: AnalysisState 정의
+
+그래프의 모든 노드(단계)가 공유하고 업데이트하는 중앙 데이터 구조입니다. `TypedDict`를 사용하여 각 데이터의 타입을 명확하게 정의합니다.
 
 ```python
-# 전체가 LangGraph 노드
-graph = StateGraph(PipelineState)
-graph.add_node("capture_frames", capture_frames_node)      # 일반 노드
-graph.add_node("create_window", window_manager_node)       # 일반 노드
-graph.add_node("vlm_analysis", vlm_node)                   # 일반 노드
-graph.add_node("send_to_backend", backend_node)            # 일반 노드
-graph.add_node("precision_agent", precision_agent)         # AI 에이전트 노드
+from typing import TypedDict, List, Optional, Literal
+from datetime import datetime
+
+# 1차 분류: VLM 분석 결과
+RiskLevel = Literal["NORMAL", "SUSPICIOUS", "ABNORMAL"]
+
+# 2차 분류: 정밀 분석 이벤트 유형
+EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]
+
+class AnalysisState(TypedDict):
+    """LangGraph 분석 파이프라인의 상태를 정의하는 TypedDict"""
+
+    # --- 초기 입력 ---
+    camera_id: str
+    camera_name: str
+    camera_location: str
+    occurred_at: datetime
+    frames: List[bytes]
+    
+    # --- 워크플로우 진행 중 생성 ---
+    event_id: str
+    
+    # --- 분석 결과 ---
+    risk_level: RiskLevel
+    event_type: EventType
+    summary: str
+    risk_score: float
+    report: str             # -- 작업중 -- (보고서 생성 LLM 결과)
+    
+    # --- 메타 데이터 ---
+    actions: list           # -- 작업중 --
+    rag_references: list    # -- 작업중 --
+    errors: List[str]
 ```
-
-| 장점 | 단점 |
-|------|------|
-| 통합 오케스트레이션 | 프레임 캡처에 불필요한 오버헤드 |
-| LangGraph Studio 시각화 | Producer 성능 저하 우려 |
-| 체크포인팅/장애 복구 | 다중 카메라 병렬 처리 어려움 |
-| 일관된 에러 처리 | 기존 코드 전체 재작성 필요 |
-
-### 방식 2️⃣: 에이전트 부분만 LangGraph 적용 (✅ 권장)
-
-```
-[기존 파이프라인 유지]                    [LangGraph 적용]
-Producer → WindowManager → Queue → ┌──────────────────────────┐
-                                   │  LangGraph Agent         │
-                                   │  ┌─────────────────────┐  │
-                                   │  │ vlm_analysis        │  │
-                                   │  │ → backend_report    │  │
-                                   │  │ → conditional_router│  │
-                                   │  │ → precision_agent   │  │
-                                   │  └─────────────────────┘  │
-                                   └──────────────────────────┘
-```
-
-| 장점 | 단점 |
-|------|------|
-| 관심사 분리 (I/O vs AI) | 두 가지 패러다임 공존 |
-| 점진적 도입 가능 | 전체 플로우 시각화 부분적 |
-| 고성능 유지 | |
-| 에이전트 로직 독립 발전 | |
-
-### 🏆 비교 결론
-
-| 기준 | 전체 LangGraph | 에이전트만 LangGraph |
-|------|---------------|---------------------|
-| **성능** | ❌ 오버헤드 | ✅ 최적 |
-| **개발 비용** | ❌ 전체 재작성 | ✅ 최소 변경 |
-| **LangGraph 적합성** | ⚠️ I/O에 부적합 | ✅ 의사결정에 최적 |
-| **확장성** | ⚠️ 복잡 | ✅ 에이전트만 발전 |
-| **유지보수** | ❌ 높은 복잡도 | ✅ 관심사 분리 |
-
-**결론: 방식 2️⃣ (9번 VLM 분석 요청부터 LangGraph 적용) 권장**
 
 ---
 
 ## 📁 디렉토리 구조 (LangGraph 적용 후)
 
 ```
-aegis-ai-agent/
-├── requirements.txt                    # 의존성 (langgraph, langchain 등 추가)
-├── pyproject.toml                      # 프로젝트 설정
-├── README.md
-├── docs/
-│   └── ...
+aegis-ai-agent/src/
 │
-├── src/
+├── __init__.py
+├── app.py               # 🚀 에이전트 실행의 주 진입점
+├── config.py            # ⚙️ 전역 설정
+├── utils.py             # 🛠️ 공용 유틸리티 함수
+│
+├── core/                  # 🧠 에이전트 핵심 파이프라인 (실시간 처리)
 │   ├── __init__.py
-│   ├── main.py                         # 메인 진입점
-│   ├── config.py                       # 환경 설정
-│   ├── utils.py                        # 유틸리티 함수
-│   │
-│   ├── # ─────────────────────────────────────────────────
-│   ├── # 🔧 일반 Python 파이프라인 (기존 유지)
-│   ├── # ─────────────────────────────────────────────────
-│   ├── redis_manager.py                # Redis 연결 및 Pub/Sub
-│   ├── producer.py                     # CV2/RTSP 프레임 캡처
-│   ├── windowing.py                    # 슬라이딩 윈도우 버퍼 관리
-│   ├── queue_manager.py                # 스레드 안전 큐
-│   ├── consumer.py                     # 워커 스레드 (LangGraph 호출부)
-│   │
-│   ├── # ─────────────────────────────────────────────────
-│   ├── # 🤖 LangGraph 파이프라인 (새로 작성)
-│   ├── # ─────────────────────────────────────────────────
-│   ├── graph/                          # LangGraph 관련 모듈
-│   │   ├── __init__.py
-│   │   ├── state.py                    # 상태 정의 (TypedDict)
-│   │   ├── analysis_graph.py           # 메인 분석 그래프
-│   │   ├── nodes/                      # 개별 노드 구현
-│   │   │   ├── __init__.py
-│   │   │   ├── vlm_node.py             # VLM 분석 노드
-│   │   │   ├── backend_node.py         # 백엔드 전송 노드
-│   │   │   └── precision_node.py       # 정밀 분석 에이전트 노드
-│   │   ├── edges/                      # 조건부 엣지 (라우터)
-│   │   │   ├── __init__.py
-│   │   │   └── routers.py              # 분기 조건 함수들
-│   │   └── tools/                      # LLM 에이전트용 도구
-│   │       ├── __init__.py
-│   │       ├── precision_tool.py       # 정밀 분석 API 호출 도구
-│   │       └── notification_tool.py    # 알림 전송 도구
-│   │
-│   ├── # ─────────────────────────────────────────────────
-│   ├── # 🔌 외부 API 클라이언트 (기존 유지, 일부 수정)
-│   ├── # ─────────────────────────────────────────────────
-│   ├── clients/                        # 외부 API 클라이언트 (리팩토링)
-│   │   ├── __init__.py
-│   │   ├── vlm_client.py               # VLM API 클라이언트
-│   │   ├── backend_client.py           # 백엔드 API 클라이언트
-│   │   └── precision_client.py         # 정밀 분석 API 클라이언트
-│   │
-│   └── mock_server.py                  # 테스트용 Mock 서버
+│   ├── consumer.py        # - 작업 오케스트레이션 (LangGraph 트리거)
+│   ├── producer.py        # - 비디오 스트림 프레임 캡처
+│   ├── windowing.py       # - 프레임 윈도우 관리
+│   ├── queue_manager.py   # - 작업 큐 관리
+│   └── redis_manager.py   # - Redis 연동 및 동적 카메라 관리
 │
-└── tests/
+├── clients/               # 📡 외부 서비스 통신 클라이언트
+│   ├── __init__.py
+│   ├── backend_client.py  # - Aegis 백엔드 API 클라이언트
+│   ├── precision_client.py# - 정밀 분석 API 클라이언트
+│   ├── vlm_client.py      # - VLM API 클라이언트
+│   └── vector_store_client.py # - Vector DB 클라이언트 (RAG용)
+│
+├── graph/                 # 🤖 LangGraph 기반 다단계 분석/추론 계층
+│   ├── __init__.py
+│   ├── analysis_graph.py  # - 메인 분석 워크플로우(그래프) 빌더
+│   ├── state.py           # - 그래프의 상태(AnalysisState) 객체 정의
+│   │
+│   ├── nodes/             # 📄 그래프의 각 '단계' (기능별 파일 분리)
+│   │   ├── __init__.py
+│   │   ├── vlm_analysis.py       # 1. VLM 1차 분석
+│   │   ├── precision_analysis.py # 2. 정밀 분석 (LLM)
+│   │   ├── update_backend.py     # 3. 백엔드 갱신
+│   │   └── generate_report.py    # 4. RAG 기반 최종 보고서 생성
+│   │
+│   └── edges/             # ↪️ 그래프의 '흐름 제어'
+│       ├── __init__.py
+│       └── routers.py     # - 조건부 분기 로직
+│
+├── retrieval/             # 📚 RAG 및 검색 관련 기능
+│   ├── __init__.py
+│   ├── retriever_factory.py # - Retriever 객체 생성 (Vector DB와 연결)
+│   ├── indexer.py           # - 외부 문서(매뉴얼 등)를 임베딩하고 DB에 저장
+│   │
+│   └── tools/               # 🛠️ LangGraph 노드에서 사용할 도구
+│       ├── __init__.py
+│       ├── search_manual_tool.py     # - '대응 매뉴얼 검색' 도구
+│       └── search_past_cases_tool.py # - '유사 과거 사례 검색' 도구
+│
+└── api/                   # 🌐 에이전트 자체 API 서버 (상태 조회 등)
     ├── __init__.py
-    ├── test_graph/                     # LangGraph 테스트
-    │   ├── test_analysis_graph.py
-    │   ├── test_nodes.py
-    │   └── test_routers.py
-    └── test_pipeline/                  # 기존 파이프라인 테스트
-        ├── test_producer.py
-        └── test_windowing.py
+    ├── api_server.py      # - 에이전트 상태 조회를 위한 API 서버
+    └── mock_server.py     # - 외부 서비스 Mock 서버
 ```
-
----
-
-## 💻 구현 가이드
-
-### Phase 1: 상태 및 기본 그래프 구조 정의
-
-#### `src/graph/state.py` - 상태 정의
-```python
-"""LangGraph 분석 파이프라인 상태 정의"""
-from typing import TypedDict, List, Optional, Any
-from datetime import datetime
-
-
-class AnalysisState(TypedDict):
-    """분석 파이프라인의 상태를 정의하는 TypedDict"""
-    
-    # 입력 데이터
-    camera_id: str
-    frames: List[bytes]                 # JPEG 인코딩된 프레임들
-    window_start: datetime
-    window_end: datetime
-    
-    # VLM 분석 결과
-    vlm_result: Optional[dict]          # VLM API 응답
-    vlm_category: Optional[str]         # 'normal', 'suspicious', 'abnormal'
-    vlm_confidence: Optional[float]     # 신뢰도 (0.0 ~ 1.0)
-    vlm_description: Optional[str]      # 상황 설명
-    
-    # 백엔드 통신 결과
-    backend_sent: bool                  # 백엔드 전송 완료 여부
-    event_id: Optional[str]             # 백엔드에서 발급한 이벤트 ID
-    
-    # 정밀 분석 결과
-    precision_triggered: bool           # 정밀 분석 트리거 여부
-    precision_result: Optional[dict]    # 정밀 분석 API 응답
-    
-    # 에러 추적
-    errors: List[str]                   # 발생한 에러 목록
-```
-
-#### `src/graph/analysis_graph.py` - 메인 그래프
-```python
-"""AEGIS 분석 파이프라인 LangGraph 구현"""
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
-
-from .state import AnalysisState
-from .nodes.vlm_node import vlm_analysis_node
-from .nodes.backend_node import backend_report_node
-from .nodes.precision_node import precision_agent_node
-from .edges.routers import should_trigger_precision
-
-
-def create_analysis_graph(
-    vlm_client,
-    backend_client,
-    precision_client,
-    checkpointer=None
-):
-    """
-    분석 파이프라인 그래프를 생성합니다.
-    
-    Args:
-        vlm_client: VLM API 클라이언트
-        backend_client: 백엔드 API 클라이언트
-        precision_client: 정밀 분석 API 클라이언트
-        checkpointer: 상태 체크포인터 (선택사항)
-    
-    Returns:
-        컴파일된 LangGraph 인스턴스
-    """
-    # 클라이언트 의존성 주입을 위한 클로저
-    def vlm_node(state: AnalysisState) -> AnalysisState:
-        return vlm_analysis_node(state, vlm_client)
-    
-    def backend_node(state: AnalysisState) -> AnalysisState:
-        return backend_report_node(state, backend_client)
-    
-    def precision_node(state: AnalysisState) -> AnalysisState:
-        return precision_agent_node(state, precision_client)
-    
-    # 그래프 구성
-    graph = StateGraph(AnalysisState)
-    
-    # 노드 추가
-    graph.add_node("vlm_analysis", vlm_node)
-    graph.add_node("backend_report", backend_node)
-    graph.add_node("precision_agent", precision_node)
-    
-    # 엣지 연결
-    graph.set_entry_point("vlm_analysis")
-    graph.add_edge("vlm_analysis", "backend_report")
-    
-    # 조건부 분기: 정밀 분석 필요 여부
-    graph.add_conditional_edges(
-        "backend_report",
-        should_trigger_precision,
-        {
-            "precision": "precision_agent",
-            "end": END
-        }
-    )
-    graph.add_edge("precision_agent", END)
-    
-    # 체크포인터 설정 (선택사항)
-    if checkpointer is None:
-        checkpointer = MemorySaver()
-    
-    return graph.compile(checkpointer=checkpointer)
-
-
-class AnalysisGraphRunner:
-    """Consumer에서 사용하기 위한 그래프 실행 래퍼"""
-    
-    def __init__(self, vlm_client, backend_client, precision_client):
-        self.graph = create_analysis_graph(
-            vlm_client, backend_client, precision_client
-        )
-    
-    def invoke(self, task: dict) -> dict:
-        """
-        Consumer에서 호출하는 메인 진입점
-        
-        Args:
-            task: 큐에서 가져온 작업 딕셔너리
-                - camera_id: str
-                - low_res_frames: List[bytes]
-                - window_start: datetime
-                - window_end: datetime
-        
-        Returns:
-            분석 완료된 상태 딕셔너리
-        """
-        initial_state: AnalysisState = {
-            "camera_id": task["camera_id"],
-            "frames": task["low_res_frames"],
-            "window_start": task.get("window_start"),
-            "window_end": task.get("window_end"),
-            "vlm_result": None,
-            "vlm_category": None,
-            "vlm_confidence": None,
-            "vlm_description": None,
-            "backend_sent": False,
-            "event_id": None,
-            "precision_triggered": False,
-            "precision_result": None,
-            "errors": []
-        }
-        
-        # 그래프 실행
-        config = {"configurable": {"thread_id": task["camera_id"]}}
-        return self.graph.invoke(initial_state, config)
-```
-
-### Phase 2: 노드 구현
-
-#### `src/graph/nodes/vlm_node.py`
-```python
-"""VLM 분석 노드"""
-import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from ..state import AnalysisState
-    from ...clients.vlm_client import VLMClient
-
-logger = logging.getLogger("aegis-agent.graph.vlm_node")
-
-
-def vlm_analysis_node(state: "AnalysisState", vlm_client: "VLMClient") -> "AnalysisState":
-    """
-    VLM API를 호출하여 프레임을 분석합니다.
-    
-    Args:
-        state: 현재 파이프라인 상태
-        vlm_client: VLM API 클라이언트
-    
-    Returns:
-        VLM 분석 결과가 추가된 상태
-    """
-    camera_id = state["camera_id"]
-    frames = state["frames"]
-    
-    logger.debug(f"[{camera_id}] VLM 분석 시작 (프레임 수: {len(frames)})")
-    
-    try:
-        # VLM API 호출
-        task_metadata = {
-            "window_start": state["window_start"],
-            "window_end": state["window_end"]
-        }
-        vlm_result = vlm_client.analyze_frames(camera_id, frames, task_metadata)
-        
-        if vlm_result is None:
-            logger.warning(f"[{camera_id}] VLM 분석 실패")
-            return {
-                **state,
-                "errors": state["errors"] + ["VLM 분석 실패"]
-            }
-        
-        logger.info(
-            f"[{camera_id}] VLM 분석 완료 - "
-            f"카테고리: {vlm_result.get('primary_category', 'unknown')}"
-        )
-        
-        return {
-            **state,
-            "vlm_result": vlm_result,
-            "vlm_category": vlm_result.get("primary_category", "unknown").lower(),
-            "vlm_confidence": vlm_result.get("confidence", 0.0),
-            "vlm_description": vlm_result.get("description", "")
-        }
-        
-    except Exception as e:
-        logger.error(f"[{camera_id}] VLM 노드 에러: {e}", exc_info=True)
-        return {
-            **state,
-            "errors": state["errors"] + [f"VLM 노드 에러: {str(e)}"]
-        }
-```
-
-#### `src/graph/nodes/backend_node.py`
-```python
-"""백엔드 전송 노드"""
-import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from ..state import AnalysisState
-    from ...clients.backend_client import BackendClient
-
-logger = logging.getLogger("aegis-agent.graph.backend_node")
-
-
-def backend_report_node(state: "AnalysisState", backend_client: "BackendClient") -> "AnalysisState":
-    """
-    VLM 분석 결과를 백엔드 서버로 전송하고 이벤트 ID를 수신합니다.
-    
-    Args:
-        state: 현재 파이프라인 상태
-        backend_client: 백엔드 API 클라이언트
-    
-    Returns:
-        백엔드 전송 결과가 추가된 상태
-    """
-    camera_id = state["camera_id"]
-    vlm_result = state["vlm_result"]
-    
-    # VLM 결과가 없으면 스킵
-    if vlm_result is None:
-        logger.warning(f"[{camera_id}] VLM 결과 없음 - 백엔드 전송 스킵")
-        return state
-    
-    logger.debug(f"[{camera_id}] 백엔드 전송 시작")
-    
-    try:
-        # 백엔드 API 호출
-        task_metadata = {
-            "window_start": state["window_start"],
-            "window_end": state["window_end"]
-        }
-        response = backend_client.send_vlm_result(camera_id, vlm_result, task_metadata)
-        
-        # 이벤트 ID 추출
-        event_id = None
-        if response:
-            event_id = response.get("event_id") or response.get("id")
-        
-        logger.info(f"[{camera_id}] 백엔드 전송 완료 - 이벤트 ID: {event_id}")
-        
-        return {
-            **state,
-            "backend_sent": True,
-            "event_id": event_id
-        }
-        
-    except Exception as e:
-        logger.error(f"[{camera_id}] 백엔드 노드 에러: {e}", exc_info=True)
-        return {
-            **state,
-            "backend_sent": False,
-            "errors": state["errors"] + [f"백엔드 노드 에러: {str(e)}"]
-        }
-```
-
-#### `src/graph/nodes/precision_node.py`
-```python
-"""정밀 분석 에이전트 노드"""
-import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from ..state import AnalysisState
-    from ...clients.precision_client import PrecisionClient
-
-logger = logging.getLogger("aegis-agent.graph.precision_node")
-
-
-def precision_agent_node(state: "AnalysisState", precision_client: "PrecisionClient") -> "AnalysisState":
-    """
-    정밀 분석 API를 호출합니다.
-    추후 LLM 기반 의사결정 에이전트로 확장 가능합니다.
-    
-    Args:
-        state: 현재 파이프라인 상태
-        precision_client: 정밀 분석 API 클라이언트
-    
-    Returns:
-        정밀 분석 결과가 추가된 상태
-    """
-    camera_id = state["camera_id"]
-    event_id = state["event_id"]
-    frames = state["frames"]
-    vlm_result = state["vlm_result"]
-    
-    logger.info(f"[{camera_id}] 정밀 분석 시작 (이벤트 ID: {event_id})")
-    
-    try:
-        # 정밀 분석 API 호출
-        task_metadata = {
-            "window_start": state["window_start"],
-            "window_end": state["window_end"],
-            "event_id": event_id
-        }
-        precision_result = precision_client.send_for_analysis(
-            camera_id, frames, vlm_result, task_metadata
-        )
-        
-        if precision_result:
-            logger.info(f"[{camera_id}] 정밀 분석 완료")
-        else:
-            logger.warning(f"[{camera_id}] 정밀 분석 실패")
-        
-        return {
-            **state,
-            "precision_triggered": True,
-            "precision_result": precision_result
-        }
-        
-    except Exception as e:
-        logger.error(f"[{camera_id}] 정밀 분석 노드 에러: {e}", exc_info=True)
-        return {
-            **state,
-            "precision_triggered": True,
-            "errors": state["errors"] + [f"정밀 분석 노드 에러: {str(e)}"]
-        }
-```
-
-### Phase 3: 라우터 (조건부 분기) 구현
-
-#### `src/graph/edges/routers.py`
-```python
-"""조건부 분기 라우터 함수들"""
-import logging
-from typing import TYPE_CHECKING, Literal
-
-if TYPE_CHECKING:
-    from ..state import AnalysisState
-
-logger = logging.getLogger("aegis-agent.graph.routers")
-
-# 정밀 분석 트리거 카테고리
-TRIGGER_CATEGORIES = ["abnormal", "이상", "fire", "smoke", "intrusion"]
-
-
-def should_trigger_precision(state: "AnalysisState") -> Literal["precision", "end"]:
-    """
-    정밀 분석 트리거 여부를 판단합니다.
-    
-    Args:
-        state: 현재 파이프라인 상태
-    
-    Returns:
-        "precision": 정밀 분석 필요
-        "end": 정밀 분석 불필요 (정상 종료)
-    """
-    camera_id = state["camera_id"]
-    vlm_category = state.get("vlm_category", "").lower()
-    vlm_confidence = state.get("vlm_confidence", 0.0)
-    
-    # VLM 결과가 없으면 종료
-    if not state.get("vlm_result"):
-        logger.debug(f"[{camera_id}] VLM 결과 없음 → 종료")
-        return "end"
-    
-    # 트리거 조건 확인
-    is_abnormal = any(cat in vlm_category for cat in TRIGGER_CATEGORIES)
-    
-    if is_abnormal:
-        logger.info(
-            f"[{camera_id}] 이상 감지 (카테고리: {vlm_category}, "
-            f"신뢰도: {vlm_confidence:.2f}) → 정밀 분석"
-        )
-        return "precision"
-    else:
-        logger.debug(f"[{camera_id}] 정상 (카테고리: {vlm_category}) → 종료")
-        return "end"
-```
-
-### Phase 4: Consumer 통합
-
-#### `src/consumer.py` (수정)
-```python
-"""VLM 분석 작업용 Consumer 스레드 풀 - LangGraph 통합"""
-import logging
-import threading
-from concurrent.futures import ThreadPoolExecutor
-import time
-from typing import Optional
-
-from .graph.analysis_graph import AnalysisGraphRunner
-
-
-class ConsumerPool:
-    """
-    큐에서 분석 작업을 소비하는 스레드 풀 (LangGraph 통합)
-    """
-
-    def __init__(
-        self,
-        config,
-        queue_manager,
-        vlm_client,
-        precision_client,
-        backend_client,
-    ):
-        self.config = config
-        self.queue_manager = queue_manager
-        self.logger = logging.getLogger("aegis-agent.consumer")
-
-        self.num_workers = config.num_workers
-        self.executor: Optional[ThreadPoolExecutor] = None
-        self.shutdown_event = threading.Event()
-
-        # LangGraph 분석 그래프 초기화
-        self.analysis_graph = AnalysisGraphRunner(
-            vlm_client=vlm_client,
-            backend_client=backend_client,
-            precision_client=precision_client
-        )
-
-        # 통계
-        self.total_processed = 0
-        self.total_failed = 0
-        self.total_abnormal = 0
-        self.total_normal = 0
-
-    def start(self):
-        """컨슈머 스레드 풀 시작"""
-        self.logger.info(
-            f"{self.num_workers}개의 워커로 컨슈머 풀을 시작합니다 (LangGraph 파이프라인)"
-        )
-        self.executor = ThreadPoolExecutor(
-            max_workers=self.num_workers, thread_name_prefix="consumer"
-        )
-        for i in range(self.num_workers):
-            self.executor.submit(self._worker_loop, i)
-
-    def _worker_loop(self, worker_id: int):
-        """메인 워커 루프 (LangGraph 파이프라인 처리)"""
-        worker_logger = logging.getLogger(f"aegis-agent.consumer.worker-{worker_id}")
-        worker_logger.info(f"워커 {worker_id} 시작됨")
-
-        while not self.shutdown_event.is_set():
-            try:
-                task = self.queue_manager.get(timeout=1.0)
-                if task is None:
-                    continue
-
-                camera_id = task.get("camera_id", "unknown")
-                worker_logger.debug(f"{camera_id}의 작업을 처리합니다")
-
-                # ========== LangGraph 파이프라인 실행 ==========
-                result = self.analysis_graph.invoke(task)
-                # ==============================================
-
-                # 통계 업데이트
-                if result.get("errors"):
-                    self.total_failed += 1
-                else:
-                    self.total_processed += 1
-                    if result.get("precision_triggered"):
-                        self.total_abnormal += 1
-                    else:
-                        self.total_normal += 1
-
-                if (self.total_processed + self.total_failed) % 10 == 0:
-                    self._log_stats()
-
-            except Exception as e:
-                worker_logger.error(f"워커 루프에서 예상치 못한 오류 발생: {e}", exc_info=True)
-                time.sleep(1)
-
-        worker_logger.info(f"워커 {worker_id} 중지됨")
-
-    def shutdown(self):
-        """컨슈머 풀 종료"""
-        self.logger.info("컨슈머 풀을 종료합니다...")
-        self.shutdown_event.set()
-        if self.executor:
-            self.executor.shutdown(wait=True)
-        self.logger.info("컨슈머 풀이 중지되었습니다.")
-        self._log_stats()
-
-    def _log_stats(self):
-        self.logger.info(
-            f"컨슈머 통계 - 처리: {self.total_processed}, "
-            f"실패: {self.total_failed}, 이상: {self.total_abnormal}, "
-            f"정상: {self.total_normal}, 대기열: {self.queue_manager.size()}"
-        )
-
-    def get_stats(self):
-        """컨슈머 통계 조회"""
-        total = self.total_processed + self.total_failed
-        abnormal_rate = (
-            (100 * self.total_abnormal / self.total_processed)
-            if self.total_processed > 0
-            else 0
-        )
-        return {
-            "num_workers": self.num_workers,
-            "total_processed": self.total_processed,
-            "total_failed": self.total_failed,
-            "total_abnormal": self.total_abnormal,
-            "total_normal": self.total_normal,
-            "success_rate": (100 * self.total_processed / total) if total > 0 else 0,
-            "abnormal_rate": abnormal_rate,
-        }
-```
-
-### Phase 5: 의존성 추가
-
-#### `requirements.txt` (추가)
-```txt
-# 기존 의존성
-opencv-python>=4.8.0
-numpy>=1.24.0
-redis>=4.5.0
-requests>=2.28.0
-
-# LangGraph 의존성 (추가)
-langgraph>=0.2.0
-langchain>=0.3.0
-langchain-core>=0.3.0
-
-# 선택사항: LLM 연동 (Phase 2 이후)
-# langchain-openai>=0.2.0
-# langchain-anthropic>=0.2.0
-```
-
----
-
-## 🚀 구현 로드맵
-
-### Phase 1: 기본 LangGraph 구조 (현재 단계)
-- [x] 상태 정의 (`AnalysisState`)
-- [x] 기본 노드 구현 (vlm, backend, precision)
-- [x] 조건부 라우터 구현
-- [x] Consumer 통합
-- [ ] 테스트 작성
-
-### Phase 2: LLM 기반 에이전트 전환
-- [ ] 정밀 분석 노드를 LLM 에이전트로 업그레이드
-- [ ] Tool 정의 (정밀 분석 API, 알림 전송)
-- [ ] 에이전트 프롬프트 설계
-- [ ] Human-in-the-loop 지점 추가 (선택사항)
-
-### Phase 3: 고급 기능
-- [ ] 체크포인팅/상태 복구
-- [ ] Multi-agent 구조 (검증 에이전트 추가)
-- [ ] LangGraph Studio 연동
-- [ ] 모니터링/트레이싱
-
----
-
-## 컴포넌트
-
-| 컴포넌트 | 영역 | 역할 |
-|---------|------|------|
-| **Redis Manager** (`redis_manager.py`) | 🔧 Python | Redis 연결, 카메라 목록 조회, Pub/Sub을 통한 동적 스트림 관리 |
-| **Producer** (`producer.py`) | 🔧 Python | 지정된 스트림에서 프레임을 캡처하고 저해상도로 리사이즈 (CV2) |
-| **Windowing** (`windowing.py`) | 🔧 Python | 프레임을 수집하여 분석 단위(윈도우)로 만들고 큐에 전송 |
-| **Queue Manager** (`queue_manager.py`) | 🔧 Python | 스레드로부터 안전한 작업 큐 제공 |
-| **Consumer** (`consumer.py`) | 🔧 Python | 큐에서 작업을 가져와 LangGraph 파이프라인 호출 |
-| **Analysis Graph** (`graph/analysis_graph.py`) | 🤖 LangGraph | VLM→백엔드→분기→정밀분석 파이프라인 오케스트레이션 |
-| **VLM Node** (`graph/nodes/vlm_node.py`) | 🤖 LangGraph | VLM API 호출 노드 |
-| **Backend Node** (`graph/nodes/backend_node.py`) | 🤖 LangGraph | 백엔드 전송 및 이벤트 ID 수신 노드 |
-| **Precision Node** (`graph/nodes/precision_node.py`) | 🤖 LangGraph | 정밀 분석 에이전트 노드 (추후 LLM 기반) |
-| **Routers** (`graph/edges/routers.py`) | 🤖 LangGraph | 조건부 분기 로직 |
-| **VLM Client** (`clients/vlm_client.py`) | 🔌 Client | VLM 서버와의 HTTP 통신 담당 |
-| **Backend Client** (`clients/backend_client.py`) | 🔌 Client | 백엔드 서버와의 HTTP 통신 담당 |
-| **Precision Client** (`clients/precision_client.py`) | 🔌 Client | 정밀 분석 서버와의 HTTP 통신 담당 |
-| **Mock Servers** (`mock_server.py`) | 🧪 Test | 개발 및 테스트를 위한 Mock 서버 |
-
----
-
-## 설치 및 사용법
-
-### 1. 의존성 설치
-```bash
-cd aegis-ai-agent
-pip install -r requirements.txt
-```
-
-### 2. Redis 설정
-```bash
-# Redis에 카메라 목록 등록
-redis-cli SADD analysis:cameras "camera1:Camera_01" "camera2:Camera_02"
-
-# 변경 알림 발행
-redis-cli PUBLISH camera:analysis:update "updated"
-```
-
-### 3. 에이전트 실행
-```bash
-python -m src.main --log-level DEBUG
-```
-
-### 4. Mock 모드 실행 (테스트)
-```bash
-python -m src.main --mock --log-level DEBUG
-```
-
-## CLI 인자
-
-| 인자 | 설명 | 기본값 |
-|------|------|--------|
-| `--log-level` | 로그 레벨 (DEBUG, INFO, WARNING, ERROR) | INFO |
-| `--mock` | Mock 서버 모드 활성화 | False |
-| `--num-workers` | Consumer 워커 스레드 수 | 4 |
-| `--queue-max-size` | 작업 큐 최대 크기 | 100 |
-````

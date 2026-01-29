@@ -24,7 +24,7 @@ class WindowManager:
         self.queue_manager = queue_manager
         self.logger = logging.getLogger("aegis-agent.windowing")
 
-        # {카메라_id: deque((프레임, 타임스탬프))}
+        # {카메라_id: deque((프레임, 타임스탬프, 카메라정보))}
         self.buffers: Dict[str, Deque] = {}
         self.locks: Dict[str, threading.Lock] = {}
 
@@ -40,7 +40,7 @@ class WindowManager:
 
     def add_frame(
         self,
-        camera_id: str,
+        camera_info: Dict,
         frame: bytes,
         timestamp: datetime,
     ):
@@ -48,10 +48,11 @@ class WindowManager:
         카메라 버퍼에 프레임 추가
 
         Args:
-            camera_id: 카메라 식별자
+            camera_info: 카메라 정보 딕셔너리
             frame: JPEG 프레임 바이트
             timestamp: 프레임 캡처 타임스탬프
         """
+        camera_id = camera_info.get('id', 'unknown')
         current_time = time.time()
         if camera_id not in self.buffers:
             # 새 카메라에 대한 버퍼 및 시간 추적 초기화
@@ -61,7 +62,7 @@ class WindowManager:
             self.logger.info(f"카메라 버퍼 초기화: {camera_id}")
 
         with self.locks[camera_id]:
-            self.buffers[camera_id].append((frame, timestamp))
+            self.buffers[camera_id].append((frame, timestamp, camera_info))
             self.last_frame_time[camera_id] = current_time # 마지막 프레임 도착 시간 기록
 
     def _window_loop(self):
@@ -132,18 +133,21 @@ class WindowManager:
         self._create_and_queue_task(camera_id, flush_frames, "강제 처리")
         buffer.clear() # 강제 처리 후에는 버퍼를 완전히 비움
 
-    def _create_and_queue_task(self, camera_id: str, frames: List[Tuple[bytes, datetime]], reason: str):
+    def _create_and_queue_task(self, camera_id: str, frames: List[Tuple[bytes, datetime, Dict]], reason: str):
         """주어진 프레임들로 작업을 생성하고 큐에 넣습니다."""
         if not frames:
             return
 
-        frame_timestamps = [ts for _, ts in frames]
+        frame_timestamps = [ts for _, ts, _ in frames]
         start_time_str = frame_timestamps[0].strftime("%H:%M:%S")
         end_time_str = frame_timestamps[-1].strftime("%H:%M:%S")
+        
+        # 첫 번째 프레임의 카메라 정보를 사용
+        camera_info = frames[0][2]
 
         task = {
-            "camera_id": camera_id,
-            "low_res_frames": [frame for frame, _ in frames],
+            "camera_info": camera_info,
+            "low_res_frames": [frame for frame, _, _ in frames],
             "timestamp": datetime.now(),
             "window_start": start_time_str,
             "window_end": end_time_str,
