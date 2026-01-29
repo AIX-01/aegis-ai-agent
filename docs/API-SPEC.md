@@ -220,40 +220,6 @@
 
 ---
 
-### POST /api/events
-
-이벤트 생성 (인증 필요)
-
-**Request:**
-
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| cameraId | string | O | 카메라 ID |
-| type | string | O | 이벤트 타입 |
-| timestamp | string | X | ISO8601 (기본: 현재) |
-| description | string | X | 설명 |
-| agentAction | string | X | 권장 조치 |
-| summary | string | X | 요약 |
-| analysisReport | string | X | 분석 리포트 |
-| clipData | byte[] | X | 클립 데이터 |
-
-**Response:** `200 OK` → Event
-
----
-
-### PATCH /api/events/{id}/status
-
-이벤트 상태 변경 (인증 필요)
-
-**Request:**
-
-| 필드 | 타입 | 필수 | 설명 |
-|------|------|------|------|
-| status | string | O | "processing" 또는 "resolved" |
-
-**Response:** `200 OK` → Event
-
----
 
 ### DELETE /api/events/{id}
 
@@ -543,27 +509,31 @@ SSE 스트림 연결 (인증 필요)
 
 이벤트 생성 (Agent → Spring)
 
-- 클립 추출이 자동으로 수행됨
+- 클립 추출은 비동기로 수행됨
 
 **Request:**
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| cameraName | string | O | MediaMTX 스트림 경로명 (예: cam1) |
-| eventType | string | O | assault/burglary/dump/swoon/vandalism |
-| timestamp | string | X | ISO8601 (기본: 현재) |
+| cameraId | string | O | 카메라 UUID |
+| risk | string | O | normal/suspicious/abnormal |
+| type | string | O | assault/burglary/dump/swoon/vandalism |
+| occurredAt | string | X | ISO8601 (기본: 현재) |
 
-**Response:** `201 Created` → Event
+**Response:** `201 Created`
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| eventId | string | 생성된 이벤트 ID |
 
 **로직:**
 
-1. cameraName으로 카메라 조회
+1. cameraId로 카메라 조회
 2. DB에 Event 저장 (status=PROCESSING)
-3. HLS 세그먼트 다운로드 → FFmpeg 변환 → MinIO 업로드
-4. Event.clipUrl 업데이트
-5. 카메라 권한 있는 사용자에게 Notification 생성
-6. SSE `notification` 개별 전송
-7. SSE `event` 전체 브로드캐스트
+3. 비동기: HLS 세그먼트 다운로드 → MinIO 업로드
+4. 카메라 권한 있는 사용자에게 Notification 생성 (ALERT)
+5. SSE `notification` 개별 전송
+6. SSE `event` 전체 브로드캐스트
 
 ---
 
@@ -575,21 +545,24 @@ SSE 스트림 연결 (인증 필요)
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| agentAction | string | X | 권장 조치 |
 | summary | string | X | 요약 |
-| analysisReport | string | X | 상세 리포트 |
+| riskScore | string | X | 위험 점수 (예: HIGH, MEDIUM, LOW) |
+| actions | object[] | X | 권장 조치 목록 (JSON) |
+| ragReferences | object[] | X | RAG 참조 자료 (JSON) |
+| report | string | X | 상세 리포트 |
 
 **Response:** `200 OK`
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
 | eventId | string | 이벤트 ID |
-| status | string | "resolved" |
 
 **Side Effect:**
 
-1. Event 업데이트 (status=RESOLVED)
-2. SSE `event` 전체 브로드캐스트
+1. Event 업데이트 (status=ANALYZED)
+2. 카메라 권한 있는 사용자에게 Notification 생성 (WARNING)
+3. SSE `notification` 개별 전송
+4. SSE `event` 전체 브로드캐스트
 
 ---
 
@@ -625,14 +598,16 @@ SSE 스트림 연결 (인증 필요)
 | id | string | UUID |
 | cameraId | string | 카메라 ID |
 | cameraName | string | 카메라 장소 |
-| type | string | 이벤트 타입 |
-| timestamp | string | 발생 시각 (ISO8601) |
-| status | "processing" \| "resolved" | 상태 |
-| description | string | 설명 |
-| agentAction | string? | 권장 조치 |
+| riskLevel | string | 위험 수준 (normal/suspicious/abnormal) |
+| eventType | string | 이벤트 타입 |
+| occurredAt | string | 발생 시각 (ISO8601) |
+| status | "processing" \| "analyzed" | 상태 |
 | clipUrl | string? | 클립 키 |
 | summary | string? | 요약 |
-| analysisReport | string? | 상세 리포트 |
+| riskScore | string? | 위험 점수 |
+| actions | object[]? | 권장 조치 (JSON) |
+| ragReferences | object[]? | RAG 참조 (JSON) |
+| report | string? | 상세 리포트 |
 
 ### Notification
 
@@ -652,7 +627,7 @@ SSE 스트림 연결 (인증 필요)
 |------|------|------|
 | day | string | 날짜 |
 | events | number | 이벤트 수 |
-| resolved | number | 해결된 수 |
+| analyzed | number | 분석 완료 수 |
 
 ### EventTypeStat
 
