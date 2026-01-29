@@ -598,8 +598,8 @@ SSE 스트림 연결 (인증 필요)
 | id | string | UUID |
 | cameraId | string | 카메라 ID |
 | cameraName | string | 카메라 장소 |
-| riskLevel | string | 위험 수준 (normal/suspicious/abnormal) |
-| eventType | string | 이벤트 타입 |
+| risk | string | 위험 수준 (normal/suspicious/abnormal) |
+| type | string | 이벤트 타입 |
 | occurredAt | string | 발생 시각 (ISO8601) |
 | status | "processing" \| "analyzed" | 상태 |
 | clipUrl | string? | 클립 키 |
