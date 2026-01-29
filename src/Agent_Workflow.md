@@ -50,16 +50,24 @@ graph TD
     end
 
     subgraph Agent["AEGIS 에이전트"]
-        subgraph Redis["Redis (데이터 저장소 & 메시지 브로커)"]
-            R["analysis:cameras<br>(Camera List)"]
-            U["camera:analysis:update<br>(Pub/Sub Channel)"]
+        subgraph Traditional["일반 Python 파이프라인 (1-8단계)"]
+            subgraph Redis["Redis (데이터 저장소 & 메시지 브로커)"]
+                R["analysis:cameras<br>(Camera List)"]
+                U["camera:analysis:update<br>(Pub/Sub Channel)"]
+            end
+            
+            RM["Redis Manager"]
+            P["Producer Pool<br>(CV2/RTSP)"]
+            WM["Window Manager<br>(버퍼 관리)"]
+            Q["작업 큐"]
         end
         
-        RM["Redis Manager"]
-        P["Producer Pool"]
-        WM["Window Manager"]
-        Q["작업 큐"]
-        C["Consumer Pool"]
+        subgraph LangGraph["🤖 LangGraph 파이프라인 (9-14단계)"]
+            C["Consumer Pool<br>↓<br>Analysis Graph"]
+            Decision{"트리거 조건 판단<br>'이상'인가?"}
+            C_Normal("작업 종료")
+            C_Abnormal["정밀 분석 에이전트"]
+        end
 
         S -- "1. 카메라 목록 업데이트" --> R
         S -- "2. 업데이트 알림" --> U
@@ -71,31 +79,36 @@ graph TD
         P -- "6. 프레임 캡처" --> WM
         WM -- "7. 윈도우 생성" --> Q
         Q -- "8. 작업 수신" --> C
-        C -- "9. VLM 분석 요청" --> VLM
     end
-
+    
+    C -- "9. VLM 분석 요청" --> VLM
     VLM -- "10. VLM 분석 결과 수신" --> C
     C -- "11. VLM 결과 전송" --> Backend
     Backend -- "12. 이벤트 ID 응답" --> C
-    C -- "13. 트리거 조건 판단" --> Decision{"'이상'인가?"}
-    Decision -- "No (정상 또는 의심)" --> C_Normal("14a. 작업 종료")
-    Decision -- "Yes (이상)" --> C_Abnormal
-    C_Abnormal -- "14b. 이벤트 ID와 함께<br>정밀 분석 요청" --> Precision
+    C -- "13. 트리거 조건 판단" --> Decision
+    Decision -- "No (정상 또는 의심)<br>14a." --> C_Normal
+    Decision -- "Yes (이상)<br>14b." --> C_Abnormal
+    C_Abnormal -- "이벤트 ID와 함께<br>정밀 분석 요청" --> Precision
 ```
 **워크플로우 설명:**
+
+**🔧 일반 Python 파이프라인 (1-8단계):**
 1.  **카메라 목록 업데이트**: 외부 관리 서버가 Redis의 `analysis:cameras` 키에 분석할 카메라 목록을 저장합니다.
 2.  **업데이트 알림**: 관리 서버는 목록 업데이트 후, `camera:analysis:update` 채널에 알림 메시지를 게시합니다.
 3.  **알림 구독**: `Redis Manager`는 `camera:analysis:update` 채널을 구독하고 있다가 알림을 수신합니다.
 4.  **카메라 목록 조회**: 알림을 받으면, `Redis Manager`는 Redis에서 최신 카메라 목록을 다시 조회합니다.
 5.  **Producer 동적 관리**: `Redis Manager`는 조회한 목록을 기반으로 `Producer` 스레드를 동적으로 관리합니다.
-6.  **프레임 캡처**: 각 `Producer`는 담당 스트림에서 프레임을 캡처하여 저해상도로 리사이즈합니다.
+6.  **프레임 캡처**: 각 `Producer`는 담당 스트림에서 프레임을 캡처하여 저해상도로 리사이즈합니다. (CV2 사용)
 7.  **윈도우 생성**: `Window Manager`는 프레임들을 모아 분석 단위인 '윈도우'를 생성합니다. (타임아웃 시 강제 처리 기능 포함)
 8.  **작업 수신**: `Consumer` 스레드가 `작업 큐`에서 작업을 가져옵니다.
+
+**🤖 LangGraph 파이프라인 (9-14단계):**
 9.  **VLM 분석 요청**: `Consumer`는 저해상도 프레임들을 `VLM 서버`로 보내 1차 분석을 요청합니다.
 10. **VLM 결과 수신**: `VLM 서버`로부터 '정상', '의심', '이상' 등의 분석 결과를 받습니다.
 11. **백엔드 전송**: `Consumer`는 수신한 **모든 VLM 분석 결과**를 `백엔드 서버`로 전송합니다.
 12. **이벤트 ID 수신**: 백엔드 서버로부터 해당 분석 건에 대한 고유 **이벤트 ID**를 응답받습니다.
 13. **분기 처리**: `Consumer`는 VLM 결과가 설정된 트리거 조건(예: 'abnormal', '이상')에 해당하는지 확인합니다.
+14. **조건부 정밀 분석**:
     *   **정상 또는 의심일 경우 (14a)**: 정밀 분석 없이 작업을 종료합니다.
     *   **이상일 경우 (14b)**: 발급받은 **이벤트 ID**와 함께 `정밀 분석 서버`로 2차 분석을 요청합니다.
 
