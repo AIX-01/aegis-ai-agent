@@ -8,67 +8,67 @@
 
 ```mermaid
 erDiagram
-    users ||--o{ user_cameras : has
-    users ||--o{ notifications : receives
-    cameras ||--o{ user_cameras : assigned_to
-    cameras ||--o{ events : generates
-    events ||--o{ notifications : triggers
-
     users {
-        uuid id PK
-        varchar email
-        varchar password
-        varchar name
-        user_role role
-        boolean approved
-        boolean deleted
-        timestamp deleted_at
-        timestamp created_at
-        timestamp updated_at
+        UUID id PK
+        VARCHAR(255) email
+        VARCHAR(255) password
+        VARCHAR(100) name
+        USER_ROLE role
+        BOOLEAN approved
+        BOOLEAN deleted
+        TIMESTAMP deleted_at
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
     }
 
     cameras {
-        uuid id PK
-        varchar name
-        varchar alias
-        boolean connected
-        boolean enabled
-        boolean analysis_enabled
-        timestamp created_at
-        timestamp updated_at
+        UUID id PK
+        VARCHAR(50) name
+        VARCHAR(100) location
+        BOOLEAN connected
+        BOOLEAN enabled
+        BOOLEAN analysis_enabled
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
     }
 
     user_cameras {
-        uuid id PK
-        uuid user_id FK
-        uuid camera_id FK
+        UUID id PK
+        UUID user_id FK
+        UUID camera_id FK
     }
 
     events {
-        uuid id PK
-        uuid camera_id FK
-        event_type type
-        timestamp timestamp
-        event_status status
-        text description
-        text agent_action
-        varchar clip_url
-        text summary
-        text analysis_report
-        timestamp created_at
-        timestamp updated_at
+        UUID id PK
+        UUID camera_id FK
+        EVENT_TYPE type
+        TIMESTAMP timestamp
+        EVENT_STATUS status
+        TEXT description
+        TEXT agent_action
+        VARCHAR(500) clip_url
+        TEXT summary
+        TEXT analysis_report
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
     }
 
     notifications {
-        uuid id PK
-        uuid user_id FK
-        uuid event_id FK
-        notification_type type
-        varchar title
-        text message
-        boolean read
-        timestamp created_at
+        UUID id PK
+        UUID user_id FK
+        UUID event_id FK
+        NOTIFICATION_TYPE type
+        VARCHAR(200) title
+        TEXT message
+        BOOLEAN read
+        TIMESTAMP created_at
     }
+
+    users ||--o{ user_cameras : has
+    cameras ||--o{ user_cameras : assigned_to
+    cameras ||--o{ events : generates
+    events ||--o{ notifications : triggers
+    users ||--o{ notifications : receives
 ```
 
 ---
@@ -77,72 +77,71 @@ erDiagram
 
 ### users
 
-| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
-|------|------|------|----------|--------|
-| id | uuid | NO | PK | auto |
-| email | varchar(255) | NO | UNIQUE | - |
-| password | varchar(255) | NO | - | - |
-| name | varchar(100) | NO | - | - |
-| role | user_role | NO | - | USER |
-| approved | boolean | NO | - | false |
-| deleted | boolean | NO | - | false |
-| deleted_at | timestamp | YES | - | - |
-| created_at | timestamp | NO | - | auto |
-| updated_at | timestamp | NO | - | auto |
+| 타입 | 컬럼 | 제약조건 | NULL | 기본값 |
+| ---- | ---- | -------- | ---- | ------ |
+| UUID | id | PK | NO | auto |
+| VARCHAR(255) | email | UNIQUE | NO | - |
+| VARCHAR(255) | password | - | NO | - |
+| VARCHAR(100) | name | - | NO | - |
+| USER_ROLE | role | - | NO | USER |
+| BOOLEAN | approved | - | NO | false |
+| BOOLEAN | deleted | - | NO | false |
+| TIMESTAMP | deleted_at | - | YES | - |
+| TIMESTAMP | created_at | - | NO | auto |
+| TIMESTAMP | updated_at | - | NO | auto |
 
 ### cameras
 
-| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
-|------|------|------|----------|--------|
-| id | uuid | NO | PK | auto |
-| name | varchar(50) | NO | UNIQUE | - |
-| alias | varchar(100) | NO | - | =name |
-| connected | boolean | NO | - | false |
-| enabled | boolean | NO | - | false |
-| analysis_enabled | boolean | NO | - | false |
-| created_at | timestamp | NO | - | auto |
-| updated_at | timestamp | NO | - | auto |
+| 타입 | 컬럼 | 제약조건 | NULL | 기본값 |
+| ---- | ---- | -------- | ---- | ------ |
+| UUID | id | PK | NO | auto |
+| VARCHAR(50) | name | UNIQUE | NO | - |
+| VARCHAR(100) | location | - | NO | =name |
+| BOOLEAN | connected | - | NO | false |
+| BOOLEAN | enabled | - | NO | false |
+| BOOLEAN | analysis_enabled | - | NO | false |
+| TIMESTAMP | created_at | - | NO | auto |
+| TIMESTAMP | updated_at | - | NO | auto |
 
 ### user_cameras
 
-| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
-|------|------|------|----------|--------|
-| id | uuid | NO | PK | auto |
-| user_id | uuid | NO | FK(users.id), UK | - |
-| camera_id | uuid | NO | FK(cameras.id), UK | - |
+| 타입 | 컬럼 | 제약조건 | NULL | 기본값 |
+| ---- | ---- | -------- | ---- | ------ |
+| UUID | id | PK | NO | auto |
+| UUID | user_id | FK(users.id), UK | NO | - |
+| UUID | camera_id | FK(cameras.id), UK | NO | - |
 
 > UK: user_id + camera_id 조합에 대한 유니크 제약조건
 
 ### events
 
-| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
-|------|------|------|----------|--------|
-| id | uuid | NO | PK | auto |
-| camera_id | uuid | NO | FK(cameras.id) | - |
-| type | event_type | NO | - | - |
-| timestamp | timestamp | NO | - | - |
-| status | event_status | NO | - | PROCESSING |
-| description | text | NO | - | - |
-| agent_action | text | YES | - | - |
-| clip_url | varchar(500) | YES | - | - |
-| summary | text | YES | - | - |
-| analysis_report | text | YES | - | - |
-| created_at | timestamp | NO | - | auto |
-| updated_at | timestamp | NO | - | auto |
+| 타입 | 컬럼 | 제약조건 | NULL | 기본값 |
+| ---- | ---- | -------- | ---- | ------ |
+| UUID | id | PK | NO | auto |
+| UUID | camera_id | FK(cameras.id) | NO | - |
+| EVENT_TYPE | type | - | NO | - |
+| TIMESTAMP | timestamp | - | NO | - |
+| EVENT_STATUS | status | - | NO | PROCESSING |
+| TEXT | description | - | NO | - |
+| TEXT | agent_action | - | YES | - |
+| VARCHAR(500) | clip_url | - | YES | - |
+| TEXT | summary | - | YES | - |
+| TEXT | analysis_report | - | YES | - |
+| TIMESTAMP | created_at | - | NO | auto |
+| TIMESTAMP | updated_at | - | NO | auto |
 
 ### notifications
 
-| 컬럼 | 타입 | NULL | 제약조건 | 기본값 |
-|------|------|------|----------|--------|
-| id | uuid | NO | PK | auto |
-| user_id | uuid | NO | FK(users.id) | - |
-| event_id | uuid | YES | FK(events.id) | - |
-| type | notification_type | NO | - | - |
-| title | varchar(200) | NO | - | - |
-| message | text | NO | - | - |
-| read | boolean | NO | - | false |
-| created_at | timestamp | NO | - | auto |
-
+| 타입 | 컬럼 | 제약조건 | NULL | 기본값 |
+| ---- | ---- | -------- | ---- | ------ |
+| UUID | id | PK | NO | auto |
+| UUID | user_id | FK(users.id) | NO | - |
+| UUID | event_id | FK(events.id) | YES | - |
+| NOTIFICATION_TYPE | type | - | NO | - |
+| VARCHAR(200) | title | - | NO | - |
+| TEXT | message | - | NO | - |
+| BOOLEAN | read | - | NO | false |
+| TIMESTAMP | created_at | - | NO | auto |
 
 ---
 
@@ -151,14 +150,14 @@ erDiagram
 ### UserRole
 
 | 값 | API 값 | 설명 |
-|-----|--------|------|
+| -- | ------ | ---- |
 | ADMIN | "admin" | 관리자 (모든 권한) |
 | USER | "user" | 일반 사용자 (할당 카메라만) |
 
 ### EventType
 
 | 값 | API 값 | 설명 |
-|-----|--------|------|
+| -- | ------ | ---- |
 | ASSAULT | "assault" | 폭행 |
 | BURGLARY | "burglary" | 절도 |
 | DUMP | "dump" | 투기 |
@@ -168,16 +167,16 @@ erDiagram
 ### EventStatus
 
 | 값 | API 값 | 설명 |
-|-----|--------|------|
+| -- | ------ | ---- |
 | PROCESSING | "processing" | 분석 중 |
 | RESOLVED | "resolved" | 완료 |
 
 ### NotificationType
 
 | 값 | API 값 | 설명 |
-|-----|--------|------|
-| ALERT | "alert" | 긴급 (폭행, 절도) |
-| WARNING | "warning" | 경고 (투기, 실신, 파손) |
+| -- | ------ | ---- |
+| ALERT | "alert" | 긴급 |
+| WARNING | "warning" | 경고 |
 | INFO | "info" | 정보 |
 | SUCCESS | "success" | 성공 |
 
@@ -220,15 +219,15 @@ erDiagram
 ## Redis 키
 
 | 키 패턴 | 값 | TTL |
-|---------|----|----|
+| ------- | -- | --- |
 | `refresh_token:{token}` | userId | 7일 |
 | `mediamtx:sync:lock` | "locked" | 1초 |
-| `analysis:cameras` | JSON: [{name, alias}, ...] | 없음 |
+| `analysis:cameras` | JSON: [{id, name, location}, ...] | 없음 |
 
 ### Pub/Sub 채널
 
 | 채널 | 메시지 | 구독자 |
-|------|--------|--------|
+| ---- | ------ | ------ |
 | `camera:analysis:update` | "sync" | Python Agent |
 
 ---
@@ -256,4 +255,4 @@ files/
 
 1. `connected` DESC (온라인 우선)
 2. `enabled` DESC (활성화 우선)
-3. `alias` ASC (별칭 이름순)
+3. `location` ASC (장소 이름순)
