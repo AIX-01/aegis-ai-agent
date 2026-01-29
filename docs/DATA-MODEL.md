@@ -41,14 +41,16 @@ erDiagram
     events {
         UUID id PK
         UUID camera_id FK
+        EVENT_RISK risk
         EVENT_TYPE type
-        TIMESTAMP timestamp
+        TIMESTAMP occurred_at
         EVENT_STATUS status
-        TEXT description
-        TEXT agent_action
-        VARCHAR(500) clip_url
+        TEXT clip_url
         TEXT summary
-        TEXT analysis_report
+        VARCHAR(10) risk_score
+        JSON actions
+        JSON rag_references
+        TEXT report
         TIMESTAMP created_at
         TIMESTAMP updated_at
     }
@@ -119,14 +121,16 @@ erDiagram
 | ---- | ---- | -------- | ---- | ------ |
 | UUID | id | PK | NO | auto |
 | UUID | camera_id | FK(cameras.id) | NO | - |
+| EVENT_RISK | risk | - | NO | - |
 | EVENT_TYPE | type | - | NO | - |
-| TIMESTAMP | timestamp | - | NO | - |
+| TIMESTAMP | occurred_at | - | NO | - |
 | EVENT_STATUS | status | - | NO | PROCESSING |
-| TEXT | description | - | NO | - |
-| TEXT | agent_action | - | YES | - |
-| VARCHAR(500) | clip_url | - | YES | - |
+| TEXT | clip_url | - | YES | - |
 | TEXT | summary | - | YES | - |
-| TEXT | analysis_report | - | YES | - |
+| VARCHAR(10) | risk_score | - | YES | - |
+| JSON | actions | - | YES | - |
+| JSON | rag_references | - | YES | - |
+| TEXT | report | - | YES | - |
 | TIMESTAMP | created_at | - | NO | auto |
 | TIMESTAMP | updated_at | - | NO | auto |
 
@@ -154,6 +158,14 @@ erDiagram
 | ADMIN | "admin" | 관리자 (모든 권한) |
 | USER | "user" | 일반 사용자 (할당 카메라만) |
 
+### EventRisk
+
+| 값 | API 값 | 설명 |
+| -- | ------ | ---- |
+| NORMAL | "normal" | 정상 |
+| SUSPICIOUS | "suspicious" | 의심 |
+| ABNORMAL | "abnormal" | 이상 |
+
 ### EventType
 
 | 값 | API 값 | 설명 |
@@ -169,7 +181,7 @@ erDiagram
 | 값 | API 값 | 설명 |
 | -- | ------ | ---- |
 | PROCESSING | "processing" | 분석 중 |
-| RESOLVED | "resolved" | 완료 |
+| ANALYZED | "analyzed" | 분석 완료 |
 
 ### NotificationType
 
@@ -204,9 +216,10 @@ erDiagram
 ### events
 
 - `idx_events_camera_id` (camera_id)
+- `idx_events_risk` (risk)
 - `idx_events_type` (type)
 - `idx_events_status` (status)
-- `idx_events_timestamp` (timestamp)
+- `idx_events_occurred_at` (occurred_at)
 
 ### notifications
 
@@ -237,7 +250,7 @@ erDiagram
 ```
 files/
 └── clips/
-    └── {clipId}/
+    └── {eventId}/
         └── clip.mp4
 ```
 
