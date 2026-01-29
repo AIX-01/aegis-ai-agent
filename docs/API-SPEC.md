@@ -144,7 +144,7 @@
 
 카메라 목록 조회 (인증 필요)
 
-**정렬:** connected DESC → enabled DESC → alias ASC
+**정렬:** connected DESC → enabled DESC → location ASC
 
 **권한:** ADMIN은 전체, USER는 할당된 카메라만
 
@@ -170,7 +170,7 @@
 
 | 필드 | 타입 | 필수 | 설명 |
 |------|------|------|------|
-| alias | string | X | 별칭 |
+| location | string | X | 장소 |
 | enabled | boolean | X | 활성화 (false시 analysisEnabled도 false) |
 | analysisEnabled | boolean | X | AI 분석 활성화 (enabled=true일 때만) |
 
@@ -194,7 +194,7 @@
 | streamUrl | string | WebRTC WHEP URL (/stream/{cam}/whep) |
 | token | string | 일회용 토큰 (30초) |
 | cameraId | string | 카메라 ID |
-| cameraName | string | 카메라 별칭 |
+| cameraName | string | 카메라 장소 |
 
 **에러:** CAMERA_NOT_FOUND, CAMERA_ACCESS_DENIED, CAMERA_NOT_CONNECTED
 
@@ -613,7 +613,7 @@ SSE 스트림 연결 (인증 필요)
 |------|------|------|
 | id | string | UUID |
 | name | string | MediaMTX 스트림 이름 |
-| alias | string | 사용자 지정 별칭 |
+| location | string | 사용자 지정 장소 |
 | connected | boolean | MediaMTX 연결 상태 |
 | enabled | boolean | 메인 활성화 스위치 |
 | analysisEnabled | boolean | AI 분석 활성화 |
@@ -624,7 +624,7 @@ SSE 스트림 연결 (인증 필요)
 |------|------|------|
 | id | string | UUID |
 | cameraId | string | 카메라 ID |
-| cameraName | string | 카메라 별칭 |
+| cameraName | string | 카메라 장소 |
 | type | string | 이벤트 타입 |
 | timestamp | string | 발생 시각 (ISO8601) |
 | status | "processing" \| "resolved" | 상태 |
@@ -676,4 +676,4 @@ SSE 스트림 연결 (인증 필요)
 | streamUrl | string | WebRTC WHEP URL |
 | token | string | 일회용 토큰 (30초) |
 | cameraId | string | 카메라 ID |
-| cameraName | string | 카메라 별칭 |
+| cameraName | string | 카메라 장소 |
