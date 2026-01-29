@@ -33,9 +33,9 @@ class BackendClient:
         camera_id: str,
         vlm_result: Dict[str, Any],
         task_metadata: Dict[str, Any],
-    ) -> bool:
+    ) -> Optional[str]:
         """
-        VLM 분석 결과를 백엔드 API로 전송
+        VLM 분석 결과를 백엔드 API로 전송하고 event_id를 받습니다.
 
         Args:
             camera_id: 카메라 식별자
@@ -43,7 +43,7 @@ class BackendClient:
             task_metadata: 추가 작업 정보 (타임스탬프 등)
 
         Returns:
-            전송 성공 시 True, 실패 시 False
+            전송 성공 시 event_id, 실패 시 None
         """
         payload = self._prepare_payload(camera_id, vlm_result, task_metadata)
 
@@ -57,8 +57,16 @@ class BackendClient:
                 )
                 response.raise_for_status()
 
-                self.logger.info(f"[백엔드 전송 성공] {camera_id}의 VLM 결과를 전송했습니다.")
-                return True
+                # 응답에서 event_id 추출
+                response_data = response.json()
+                event_id = response_data.get("eventId")
+
+                if not event_id:
+                    self.logger.error(f"🚫 [백엔드 응답 오류] {camera_id}의 응답에 eventId가 없습니다.")
+                    return None
+
+                self.logger.info(f"[백엔드 전송 성공] {camera_id}의 VLM 결과를 전송하고 eventId {event_id}를 받았습니다.")
+                return event_id
 
             except Timeout:
                 self.logger.warning(
@@ -78,7 +86,7 @@ class BackendClient:
                 time.sleep(delay)
 
         self.logger.error(f"🚫 [백엔드 전송 최종 실패] {camera_id}의 VLM 결과 전송에 실패했습니다.")
-        return False
+        return None
 
     def _prepare_payload(
         self,
