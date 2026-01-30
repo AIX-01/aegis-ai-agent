@@ -62,7 +62,6 @@ erDiagram
         NOTIFICATION_TYPE type
         VARCHAR(200) title
         TEXT message
-        BOOLEAN read
         TIMESTAMP created_at
     }
 
@@ -144,7 +143,6 @@ erDiagram
 | NOTIFICATION_TYPE | type | - | NO | - |
 | VARCHAR(200) | title | - | NO | - |
 | TEXT | message | - | NO | - |
-| BOOLEAN | read | - | NO | false |
 | TIMESTAMP | created_at | - | NO | auto |
 
 ---
@@ -224,7 +222,6 @@ erDiagram
 ### notifications
 
 - `idx_notifications_user_id` (user_id)
-- `idx_notifications_user_read` (user_id, read)
 - `idx_notifications_created_at` (created_at)
 
 ---

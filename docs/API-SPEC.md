@@ -188,9 +188,26 @@
 
 ### GET /api/events
 
-이벤트 목록 조회 (인증 필요)
+이벤트 목록 조회 (인증 필요, 페이지네이션)
 
-**Response:** `200 OK` → Event[]
+**Query Parameters:**
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|----------|------|--------|------|
+| page | number | 0 | 페이지 번호 (0부터 시작) |
+| size | number | 20 | 페이지 크기 |
+
+**Response:** `200 OK` → PageResponse\<Event\>
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| content | Event[] | 이벤트 목록 |
+| page | number | 현재 페이지 |
+| size | number | 페이지 크기 |
+| totalElements | number | 전체 개수 |
+| totalPages | number | 전체 페이지 수 |
+| first | boolean | 첫 페이지 여부 |
+| last | boolean | 마지막 페이지 여부 |
 
 ---
 
@@ -352,9 +369,26 @@ SSE 스트림 연결 (인증 필요)
 
 ### GET /api/users
 
-사용자 목록 조회
+사용자 목록 조회 (페이지네이션)
 
-**Response:** `200 OK` → User[]
+**Query Parameters:**
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|----------|------|--------|------|
+| page | number | 0 | 페이지 번호 (0부터 시작) |
+| size | number | 20 | 페이지 크기 |
+
+**Response:** `200 OK` → PageResponse\<User\>
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| content | User[] | 사용자 목록 |
+| page | number | 현재 페이지 |
+| size | number | 페이지 크기 |
+| totalElements | number | 전체 개수 |
+| totalPages | number | 전체 페이지 수 |
+| first | boolean | 첫 페이지 여부 |
+| last | boolean | 마지막 페이지 여부 |
 
 ---
 
@@ -468,26 +502,6 @@ SSE 스트림 연결 (인증 필요)
 
 ---
 
-### GET /internal/agent/cameras/analysis
-
-분석 대상 카메라 조회 (Agent → Spring)
-
-**Response:** `200 OK`
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| cameras | AnalysisCamera[] | enabled && analysisEnabled인 카메라 |
-
-**AnalysisCamera:**
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| id | string | 카메라 ID |
-| name | string | 카메라 이름 |
-| enabled | boolean | 활성화 |
-| analysisEnabled | boolean | 분석 활성화 |
-
----
 
 ### POST /internal/agent/events
 
