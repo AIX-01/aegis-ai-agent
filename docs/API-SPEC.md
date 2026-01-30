@@ -183,22 +183,6 @@
 
 ---
 
-### POST /api/cameras/{id}/stream
-
-스트림 토큰 발급 (인증 필요)
-
-**Response:** `200 OK`
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| streamUrl | string | WebRTC WHEP URL (/stream/{cam}/whep) |
-| token | string | 일회용 토큰 (30초) |
-| cameraId | string | 카메라 ID |
-| cameraName | string | 카메라 장소 |
-
-**에러:** CAMERA_NOT_FOUND, CAMERA_ACCESS_DENIED, CAMERA_NOT_CONNECTED
-
----
 
 ## Event API
 
@@ -598,8 +582,8 @@ SSE 스트림 연결 (인증 필요)
 | id | string | UUID |
 | cameraId | string | 카메라 ID |
 | cameraName | string | 카메라 장소 |
-| riskLevel | string | 위험 수준 (normal/suspicious/abnormal) |
-| eventType | string | 이벤트 타입 |
+| risk | string | 위험 수준 (normal/suspicious/abnormal) |
+| type | string | 이벤트 타입 |
 | occurredAt | string | 발생 시각 (ISO8601) |
 | status | "processing" \| "analyzed" | 상태 |
 | clipUrl | string? | 클립 키 |
@@ -644,11 +628,3 @@ SSE 스트림 연결 (인증 필요)
 | events | number | 이벤트 수 |
 | alerts | number | 알림 수 |
 
-### StreamAccessResponse
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| streamUrl | string | WebRTC WHEP URL |
-| token | string | 일회용 토큰 (30초) |
-| cameraId | string | 카메라 ID |
-| cameraName | string | 카메라 장소 |

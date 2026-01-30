@@ -167,17 +167,13 @@
 | 메서드 | 설명 |
 |--------|------|
 | getAll | 카메라 목록 |
-| getById | 카메라 상세 |
 | update | 카메라 수정 |
-| requestStream | 스트림 토큰 발급 |
 
 ### eventsApi
 
 | 메서드 | 설명 |
 |--------|------|
 | getAll | 이벤트 목록 |
-| getById | 이벤트 상세 |
-| updateStatus | 상태 변경 |
 | getClipBlobUrl | 클립 Blob URL (인증 포함) |
 | downloadClip | 클립 다운로드 (인증 포함) |
 
