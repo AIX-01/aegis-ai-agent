@@ -122,14 +122,15 @@ graph TD
         
         Router -- "NORMAL" --> End(⏹️ End)
         Router -- "SUSPICIOUS" --> N_Verify["검증<br>(verification)"]
-        Router -- "ABNORMAL" --> N_Precise["정밀 분석<br>(precision_analysis)"]
+        Router -- "ABNORMAL" --> N_Precise["정밀 분석 LLM <br>(precision_analysis)"]
 
         N_Verify --> Router2{"재분기<br>(verification_router)"}
         Router2 -- "NORMAL" --> End
         Router2 -- "ABNORMAL" --> N_Precise
 
         N_Precise --> N_Update["상세 결과 백엔드 갱신<br>(update_backend)"]
-        N_Update --> N7["최종 보고서 생성<br>(generate_report)"]
+        N_Update --> N_Action["대응 조치<br>(action)"]
+        N_Action --> N7["최종 보고서 생성<br>(generate_report)"]
         N7 --> End
     end
 ```
@@ -194,13 +195,16 @@ graph TD
         Router2 -- "NORMAL" --> End
         Router2 -- "ABNORMAL" --> N_Precise
 
-        N_Precise --> D_Detail[("상세 분석 결과<br>• EventType<br>• Summary<br>• RiskScore")]:::data
+        N_Precise --> D_Detail[("상세 분석 결과<br>• RiskLevel<br>• EventType<br>• Summary<br>• RiskScore")]:::data
         D_Detail --> N_Update["15. update_backend<br>(상세 결과 갱신)"]:::proc
         
-        N_Update -.-> D_Req2[("Request<br>• eventId<br>• eventType<br>• summary<br>• riskScore")]:::data
+        N_Update -.-> D_Req2[("Request<br>• eventId<br>• risk<br>• type<br>• summary<br>• riskScore")]:::data
         D_Req2 -.-> Backend
         
-        N_Update --> N7["16. generate_report<br>(최종 보고서 생성)"]:::proc
+        N_Update --> N_Action["16. action<br>(대응 조치)"]:::proc
+        N_Action --> D_Actions[("대응 결과<br>• Actions List")]:::data
+        
+        D_Actions --> N7["17. generate_report<br>(최종 보고서 생성)"]:::proc
         N7 --> End
     end
 ```
@@ -238,12 +242,15 @@ graph TD
     *   `precision_client`를 사용하여 정밀 분석 서버에 프레임 묶음과 `event_id`를 전송합니다.
     *   LLM을 통해 구체적인 **`event_type`**, **`summary`**, **`risk_score`** 등을 한 번에 분석하여 `AnalysisState`에 저장합니다.
 15. **상세 결과 백엔드 갱신 (노드: `update_backend`)**:
-    *   `backend_client`를 사용하여 `event_id`와 함께 상세 분석 결과(`event_type`, `summary`, `risk_score`)를 **스프링부트 백엔드**로 전송합니다.
+    *   `backend_client`를 사용하여 `event_id`와 함께 상세 분석 결과(`risk`, `type`, `summary`, `risk_score`)를 **스프링부트 백엔드**로 전송합니다.
     *   백엔드는 이 정보로 기존 이벤트를 **덮어쓰기(갱신)**합니다.
-16. **최종 보고서 생성 (노드: `generate_report`)**:
+16. **대응 조치 (노드: `action`)**:
+    *   정밀 분석 결과를 바탕으로 필요한 대응 조치(예: 매뉴얼 검색, 알림 발송 등)를 결정하고 수행합니다.
+    *   수행된 조치 내역을 `AnalysisState`의 `actions` 필드에 저장합니다.
+17. **최종 보고서 생성 (노드: `generate_report`)**:
     *   **RAG(검색 증강 생성)** 기능을 수행하는 노드입니다.
     *   분석 결과와 `retrieval` 도구(대응 매뉴얼, 과거 사례)를 사용하여 최종 상세 보고서를 작성하고, `AnalysisState`의 `report` 필드를 업데이트합니다.
-17. **워크플로우 종료 (END)**: 모든 분석이 완료된 최종 `AnalysisState`를 반환하며 그래프 실행이 종료됩니다.
+18. **워크플로우 종료 (END)**: 모든 분석이 완료된 최종 `AnalysisState`를 반환하며 그래프 실행이 종료됩니다.
 
 ---
 
@@ -254,14 +261,14 @@ graph TD
 그래프의 모든 노드(단계)가 공유하고 업데이트하는 중앙 데이터 구조입니다. `TypedDict`를 사용하여 각 데이터의 타입을 명확하게 정의합니다.
 
 ```python
-from typing import TypedDict, List, Optional, Literal
+from typing import TypedDict, List, Optional, Literal, Dict, Any
 from datetime import datetime
 
 # 1차 분류: VLM 분석 결과
 RiskLevel = Literal["NORMAL", "SUSPICIOUS", "ABNORMAL"]
 
 # 2차 분류: 정밀 분석 이벤트 유형
-EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]
+EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM", "UNKNOWN"]
 
 class AnalysisState(TypedDict):
     """LangGraph 분석 파이프라인의 상태를 정의하는 TypedDict"""
@@ -270,22 +277,24 @@ class AnalysisState(TypedDict):
     camera_id: str
     camera_name: str
     camera_location: str
-    occurred_at: datetime
+    occurred_at: datetime  # 분석 윈도우의 시작 시점
     frames: List[bytes]
     
     # --- 워크플로우 진행 중 생성 ---
     event_id: str
+    vlm_result: Dict[str, Any]         # 1차 VLM 분석 원본 결과
+    precision_result: Dict[str, Any]   # 2차 정밀 분석 원본 결과
     
-    # --- 분석 결과 ---
+    # --- 최종 분석 결과 (워크플로우를 거치며 갱신됨) ---
     risk_level: RiskLevel
     event_type: EventType
     summary: str
     risk_score: float
-    report: str             # 보고서 생성 LLM 결과
+    report: str             # -- 작업중 -- (보고서 생성 LLM 결과)
     
     # --- 메타 데이터 ---
-    actions: list           
-    rag_references: list    
+    actions: list           # -- 작업중 --
+    rag_references: list    # -- 작업중 --
     errors: List[str]
 ```
 
@@ -328,7 +337,8 @@ aegis-ai-agent/src/
 │   │   ├── verification.py       # 3. 추가 검증
 │   │   ├── precision_analysis.py # 4. 정밀 분석 (LLM)
 │   │   ├── update_backend.py     # 5. 백엔드 상세 갱신
-│   │   └── generate_report.py    # 6. RAG 기반 최종 보고서 생성
+│   │   ├── action.py             # 6. 대응 조치 (추가됨)
+│   │   └── generate_report.py    # 7. RAG 기반 최종 보고서 생성
 │   │
 │   └── edges/             # ↪️ 그래프의 '흐름 제어'
 │       ├── __init__.py

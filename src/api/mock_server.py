@@ -9,7 +9,7 @@ from fastapi import FastAPI, Response, status
 from pydantic import BaseModel
 import uvicorn
 
-# Agent_Workflow.md 와 state.py 에 정의된 타입
+# README.md 와 state.py 에 정의된 타입
 RiskLevel = Literal["NORMAL", "SUSPICIOUS", "ABNORMAL"]
 EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM", "UNKNOWN"]
 
