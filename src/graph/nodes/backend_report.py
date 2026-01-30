@@ -18,16 +18,22 @@ def backend_report_node(state: AnalysisState, backend_client: BackendClient) -> 
         업데이트된 상태 딕셔너리 (event_id)
     """
     camera_id = state["camera_id"]
-    risk_level = state.get("risk_level", "UNKNOWN")
     occurred_at = state["occurred_at"]
+    vlm_result = state.get("vlm_result", {})
 
-    logger.info(f"[{camera_id}] 1차 분석 결과 백엔드 보고 시작... (Risk: {risk_level})")
+    # vlm_result에서 risk와 type 추출
+    risk = vlm_result.get("primary_category", "UNKNOWN")
+    type = vlm_result.get("secondary_category", "")
+
+    logger.info(f"[{camera_id}] 1차 분석 결과 백엔드 보고 시작... (Risk: {risk})")
 
     try:
-        vlm_result = {"primary_category": risk_level}
-        task_metadata = {"timestamp": occurred_at}
-
-        event_id = backend_client.send_vlm_result(camera_id, vlm_result, task_metadata)
+        event_id = backend_client.send_vlm_result(
+            camera_id=camera_id,
+            risk=risk,
+            type=type,
+            occurred_at=occurred_at
+        )
 
         if event_id:
             logger.info(f"[{camera_id}] 백엔드로부터 Event ID '{event_id}' 수신")

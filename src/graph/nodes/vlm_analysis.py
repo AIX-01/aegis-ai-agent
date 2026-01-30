@@ -28,12 +28,19 @@ def vlm_analysis_node(state: AnalysisState, vlm_client: VLMClient) -> Dict[str, 
         task_metadata = {"timestamp": occurred_at}
         result = vlm_client.analyze_frames(camera_id, frames, task_metadata)
 
-        if result and "risk_level" in result:
-            risk_level = result["risk_level"].upper()
-            logger.info(f"[{camera_id}] VLM 분석 결과: {risk_level}")
-            return {"risk_level": risk_level}
+        if result and "primary_category" in result:
+            risk_level = result["primary_category"].upper()
+            event_type = result.get("secondary_category", "")
+            
+            logger.info(f"[{camera_id}] VLM 분석 결과: {risk_level} ({event_type})")
+            
+            return {
+                "vlm_result": result,       # 원본 결과 저장
+                "risk_level": risk_level,   # 최종 상태 초기화
+                "event_type": event_type    # 최종 상태 초기화
+            }
         else:
-            logger.error(f"[{camera_id}] VLM 분석 결과에 'risk_level'이 없습니다.")
+            logger.error(f"[{camera_id}] VLM 분석 결과가 유효하지 않습니다.")
             return {"errors": state.get("errors", []) + ["VLM analysis failed: Invalid response"]}
 
     except Exception as e:
