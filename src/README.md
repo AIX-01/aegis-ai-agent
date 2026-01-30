@@ -122,7 +122,7 @@ graph TD
         
         Router -- "NORMAL" --> End(⏹️ End)
         Router -- "SUSPICIOUS" --> N_Verify["검증<br>(verification)"]
-        Router -- "ABNORMAL" --> N_Precise["정밀 분석<br>(precision_analysis)"]
+        Router -- "ABNORMAL" --> N_Precise["정밀 분석 LLM <br>(precision_analysis)"]
 
         N_Verify --> Router2{"재분기<br>(verification_router)"}
         Router2 -- "NORMAL" --> End
