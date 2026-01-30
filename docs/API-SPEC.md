@@ -149,7 +149,7 @@
 | 파라미터 | 타입 | 기본값 | 설명 |
 |----------|------|--------|------|
 | page | number | 0 | 페이지 번호 (0부터 시작) |
-| size | number | 9 | 페이지 크기 |
+| size | number | 6 | 페이지 크기 |
 
 **정렬:** connected DESC → enabled DESC → location ASC
 
