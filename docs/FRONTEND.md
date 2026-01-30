@@ -182,10 +182,7 @@
 | 메서드 | 설명 |
 |--------|------|
 | getAll | 알림 목록 |
-| getUnreadCount | 읽지 않은 수 |
-| markAsRead | 읽음 처리 |
-| markAllAsRead | 전체 읽음 |
-| delete | 삭제 |
+| deleteAll | 전체 삭제 (모달 닫을 때 호출) |
 
 ### statsApi
 
