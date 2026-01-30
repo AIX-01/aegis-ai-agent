@@ -14,6 +14,21 @@ from ..graph.analysis_graph import build_graph
 class ConsumerPool:
     """
     큐에서 분석 작업을 소비하는 스레드 풀 (LangGraph 기반)
+
+    이 클래스는 시스템의 Consumer 역할을 담당하며, Producer가 큐에 넣은
+    비디오 분석 작업(Task)을 비동기적으로 처리합니다.
+
+    주요 기능 및 특징:
+    1. 스레드 풀 관리: 설정된 수(config.num_workers)만큼의 워커 스레드를 생성하여
+       병렬로 작업을 처리합니다. 이를 통해 다수의 카메라 피드를 동시에 분석할 수 있습니다.
+    2. LangGraph 통합: 각 분석 작업은 LangGraph로 정의된 워크플로우(build_graph)를
+       통해 실행됩니다. 이는 분석 단계(VLM 분석, 검증, 리포트 생성 등)를 유연하게 관리하게 해줍니다.
+    3. 작업 소비 및 처리:
+       - 큐에서 대기 중인 작업을 가져옵니다 (FIFO).
+       - 작업 데이터(프레임, 카메라 정보)를 LangGraph의 초기 상태로 변환합니다.
+       - 그래프를 실행하고 결과를 받아 통계를 업데이트합니다.
+    4. 오류 처리 및 통계: 작업 처리 중 발생하는 예외를 포착하여 로깅하고,
+       전체 처리량, 성공/실패 횟수 등의 통계 지표를 유지합니다.
     """
 
     def __init__(
@@ -59,7 +74,18 @@ class ConsumerPool:
 
     def _worker_loop(self, worker_id: int):
         """
-        메인 워커 루프 (LangGraph 실행)
+        개별 워커 스레드의 메인 루프 (LangGraph 실행)
+
+        각 워커는 독립적인 스레드에서 실행되며 다음과 같은 생명주기를 가집니다:
+        1. 대기: 큐에서 새로운 작업이 들어올 때까지 대기합니다.
+        2. 인출: 큐에서 작업(Task)을 하나 가져옵니다.
+        3. 준비: 작업 데이터를 LangGraph가 이해할 수 있는 상태 객체(State)로 변환합니다.
+        4. 실행: 정의된 분석 그래프(self.graph)를 실행(invoke)합니다.
+        5. 결과 처리: 그래프 실행 결과를 분석하여 위험도(Normal/Suspicious/Abnormal)를 판별하고
+           로그를 남기거나 통계를 갱신합니다.
+
+        Args:
+            worker_id (int): 워커 식별자 (디버깅 및 로깅용)
         """
         worker_logger = logging.getLogger(f"aegis-agent.consumer.worker-{worker_id}")
         worker_logger.info(f"워커 {worker_id} 시작됨")

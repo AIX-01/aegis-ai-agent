@@ -53,8 +53,8 @@ class RedisManager:
 
     def get_analysis_cameras(self) -> List[Dict]:
         """
-        설정된 Redis 키(Set)에서 분석 대상 카메라 목록을 가져옵니다.
-        각 멤버는 {id, name, location} 형태의 JSON 문자열입니다.
+        설정된 Redis 키에서 분석 대상 카메라 목록을 가져옵니다.
+        데이터는 개별 JSON 객체 문자열의 Set이거나, 단일 JSON 배열 문자열일 수 있습니다.
 
         Returns:
             카메라 정보를 담은 딕셔너리 목록 또는 오류 발생 시 빈 목록.
@@ -63,8 +63,18 @@ class RedisManager:
             self.logger.warning("Redis에 연결되지 않았습니다. 카메라 정보를 가져올 수 없습니다.")
             return []
         try:
-            # Redis Set에서 모든 멤버 가져오기
-            camera_members = self.redis_client.smembers(self.analysis_cameras_key)
+            # Redis 키 타입 확인 (Set 또는 String)
+            key_type = self.redis_client.type(self.analysis_cameras_key)
+            self.logger.info(f"Redis 키 '{self.analysis_cameras_key}'의 타입: {key_type}")
+
+            camera_members = []
+            if key_type == 'set':
+                camera_members = self.redis_client.smembers(self.analysis_cameras_key)
+            elif key_type == 'string':
+                single_member = self.redis_client.get(self.analysis_cameras_key)
+                if single_member:
+                    camera_members = [single_member]
+
             if not camera_members:
                 self.logger.warning(f"Redis 키 '{self.analysis_cameras_key}'가 비어있거나 존재하지 않습니다.")
                 return []
@@ -72,19 +82,35 @@ class RedisManager:
             cameras = []
             for member in camera_members:
                 try:
+                    # 데이터가 리스트 형태의 JSON 문자열인지 확인 ('['로 시작)
+                    if member.strip().startswith('['):
+                        camera_list = json.loads(member)
+                        if isinstance(camera_list, list):
+                            for cam_data in camera_list:
+                                if isinstance(cam_data, dict) and 'id' in cam_data:
+                                    cameras.append(cam_data)
+                                else:
+                                    self.logger.warning(f"잘못된 카메라 데이터 형식 (dict가 아니거나 id 없음): {cam_data}")
+                            # 배열을 처리했으므로 루프의 나머지 부분은 건너뜀
+                            continue 
+                    
+                    # 개별 JSON 객체 문자열 처리
                     camera_data = json.loads(member)
                     if isinstance(camera_data, dict):
-                        # 필수 필드 확인 (선택 사항)
                         if 'id' in camera_data:
                             cameras.append(camera_data)
                         else:
                             self.logger.warning(f"카메라 데이터에 'id' 필드가 없습니다: {camera_data}")
                     else:
                         self.logger.warning(f"잘못된 카메라 데이터 형식 (dict가 아님): {member}")
+
                 except json.JSONDecodeError:
                     self.logger.error(f"카메라 데이터 JSON 디코딩 실패: {member}")
+                except Exception as e:
+                    self.logger.error(f"카메라 데이터 처리 중 오류 발생: {e}", exc_info=True)
 
-            self.logger.info(f"Redis에서 {len(cameras)}개의 카메라 정보를 가져왔습니다.")
+
+            self.logger.info(f"Redis에서 {len(cameras)}개의 카메라 정보를 성공적으로 파싱했습니다.")
             return cameras
 
         except Exception as e:

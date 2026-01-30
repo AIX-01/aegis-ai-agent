@@ -98,20 +98,20 @@ graph TD
 
     subgraph LangGraph["[2단계] LangGraph 분석/추론"]
         C --> |"Graph.invoke()"| Start(▶ Start)
-        Start --> N1["VLM 1차 분석"]
-        N1 --> N2["1차 백엔드 보고"]
-        N2 --> Router{"조건부 분기"}
+        Start --> N1["VLM 1차 분석<br>(vlm_analysis)"]
+        N1 --> N2["1차 백엔드 보고<br>(backend_report)"]
+        N2 --> Router{"조건부 분기<br>(analysis_router)"}
         
-        Router -- "정상" --> End(⏹️ End)
-        Router -- "의심" --> N_Verify["검증 노드"]
-        Router -- "이상" --> N_Precise["정밀 분석 (LLM)"]
+        Router -- "NORMAL" --> End(⏹️ End)
+        Router -- "SUSPICIOUS" --> N_Verify["검증<br>(verification)"]
+        Router -- "ABNORMAL" --> N_Precise["정밀 분석<br>(precision_analysis)"]
 
-        N_Verify --> Router2{"재분기"}
-        Router2 -- "정상" --> End
-        Router2 -- "이상" --> N_Precise
+        N_Verify --> Router2{"재분기<br>(verification_router)"}
+        Router2 -- "NORMAL" --> End
+        Router2 -- "ABNORMAL" --> N_Precise
 
-        N_Precise --> N_Update["상세 결과 백엔드 갱신"]
-        N_Update --> N7["최종 보고서 생성<br>(작업 예정)"]
+        N_Precise --> N_Update["상세 결과 백엔드 갱신<br>(update_backend)"]
+        N_Update --> N7["최종 보고서 생성<br>(generate_report)"]
         N7 --> End
     end
 ```
@@ -156,33 +156,33 @@ graph TD
     subgraph LangGraph["[2단계] LangGraph 분석 및 다단계 추론 (graph)"]
         direction TB
         C --> D_State[("AnalysisState 초기화<br>• Frames<br>• Camera Info<br>• Occurred At")]:::data
-        D_State --> N1["10. VLM 1차 분석"]:::proc
+        D_State --> N1["10. vlm_analysis<br>(VLM 1차 분석)"]:::proc
         
         N1 --> D_Risk[("Risk Level<br>(NORMAL / SUSPICIOUS / ABNORMAL)")]:::data
-        D_Risk --> N2["11. 1차 백엔드 보고"]:::proc
+        D_Risk --> N2["11. backend_report<br>(1차 백엔드 보고)"]:::proc
         
         N2 -.-> D_Req1[("Request<br>• camera_id<br>• risk_level<br>• occurred_at")]:::data
         D_Req1 -.-> Backend["스프링부트 백엔드"]:::ext
         Backend -.-> D_Res1[("Response<br>• event_id")]:::data
         D_Res1 -.-> N2
         
-        N2 --> Router{"12. 조건부 분기"}:::router
+        N2 --> Router{"12. analysis_router"}:::router
         
         Router -- "NORMAL" --> End(⏹️ End)
-        Router -- "SUSPICIOUS" --> N_Verify["13. 검증 노드"]:::proc
-        Router -- "ABNORMAL" --> N_Precise["14. 정밀 분석 (LLM)"]:::proc
+        Router -- "SUSPICIOUS" --> N_Verify["13. verification<br>(검증 노드)"]:::proc
+        Router -- "ABNORMAL" --> N_Precise["14. precision_analysis<br>(정밀 분석 LLM)"]:::proc
 
-        N_Verify --> Router2{"13a. 재분기"}:::router
+        N_Verify --> Router2{"13a. verification_router"}:::router
         Router2 -- "NORMAL" --> End
         Router2 -- "ABNORMAL" --> N_Precise
 
-        N_Precise --> D_Detail[("상세 분석 결과<br>• EventType (폭행, 침입 등)<br>• Summary (상황 요약)<br>• RiskScore (0.0~1.0)")]:::data
-        D_Detail --> N_Update["15. 상세 결과 백엔드 갱신"]:::proc
+        N_Precise --> D_Detail[("상세 분석 결과<br>• EventType<br>• Summary<br>• RiskScore")]:::data
+        D_Detail --> N_Update["15. update_backend<br>(상세 결과 갱신)"]:::proc
         
         N_Update -.-> D_Req2[("Request<br>• event_id<br>• event_type<br>• summary<br>• risk_score")]:::data
         D_Req2 -.-> Backend
         
-        N_Update --> N7["16. 최종 보고서 생성<br>(작업 예정)"]:::proc
+        N_Update --> N7["16. generate_report<br>(최종 보고서 생성)"]:::proc
         N7 --> End
     end
 ```
@@ -209,22 +209,22 @@ graph TD
 11. **1차 백엔드 보고 (노드: `backend_report`)**:
     *   `backend_client`를 사용하여 1차 분석 결과(`camera_id`, `risk_level`, `occurred_at`)를 **스프링부트 백엔드**로 전송합니다.
     *   백엔드로부터 고유한 **`event_id`**를 응답받아 `AnalysisState`에 저장합니다.
-12. **조건부 분기 (엣지: `router`)**:
+12. **조건부 분기 (엣지: `analysis_router`)**:
     *   `AnalysisState`의 `risk_level`을 확인하여 다음 경로를 결정합니다.
         *   **'NORMAL'**: 분석할 필요가 없으므로 워크플로우를 즉시 종료합니다.
         *   **'SUSPICIOUS'**: 추가적인 검증이 필요하므로 '검증' 노드로 분기합니다.
         *   **'ABNORMAL'**: 명백한 이상 상황이므로 '정밀 분석 (LLM)' 노드로 즉시 분기합니다.
 13. **검증 (노드: `verification`)** (SUSPICIOUS 경로):
-    *   '의심' 상황에 대한 추가적인 판단을 수행하여 `risk_level`을 'NORMAL' 또는 'ABNORMAL'로 재설정하고, 재분기합니다.
+    *   '의심' 상황에 대한 추가적인 판단을 수행하여 `risk_level`을 'NORMAL' 또는 'ABNORMAL'로 재설정하고, 재분기(`verification_router`)합니다.
 14. **정밀 분석 (LLM) (노드: `precision_analysis`)**:
     *   `precision_client`를 사용하여 정밀 분석 서버에 프레임 묶음과 `event_id`를 전송합니다.
     *   LLM을 통해 구체적인 **`event_type`**, **`summary`**, **`risk_score`** 등을 한 번에 분석하여 `AnalysisState`에 저장합니다.
 15. **상세 결과 백엔드 갱신 (노드: `update_backend`)**:
     *   `backend_client`를 사용하여 `event_id`와 함께 상세 분석 결과(`event_type`, `summary`, `risk_score`)를 **스프링부트 백엔드**로 전송합니다.
     *   백엔드는 이 정보로 기존 이벤트를 **덮어쓰기(갱신)**합니다.
-16. **최종 보고서 생성 (노드: `generate_report`) - (작업 예정)**:
-    *   **RAG(검색 증강 생성)** 기능을 수행하는 LLM 에이전트로 구성될 예정입니다.
-    *   LLM이 모든 분석 결과와 `retrieval` 도구를 통해 얻은 정보(대응 매뉴얼 등)를 종합하여 최종 상세 보고서를 작성하고, `AnalysisState`의 `report` 필드를 업데이트할 것입니다.
+16. **최종 보고서 생성 (노드: `generate_report`)**:
+    *   **RAG(검색 증강 생성)** 기능을 수행하는 노드입니다.
+    *   분석 결과와 `retrieval` 도구(대응 매뉴얼, 과거 사례)를 사용하여 최종 상세 보고서를 작성하고, `AnalysisState`의 `report` 필드를 업데이트합니다.
 17. **워크플로우 종료 (END)**: 모든 분석이 완료된 최종 `AnalysisState`를 반환하며 그래프 실행이 종료됩니다.
 
 ---
@@ -263,11 +263,11 @@ class AnalysisState(TypedDict):
     event_type: EventType
     summary: str
     risk_score: float
-    report: str             # -- 작업중 -- (보고서 생성 LLM 결과)
+    report: str             # 보고서 생성 LLM 결과
     
     # --- 메타 데이터 ---
-    actions: list           # -- 작업중 --
-    rag_references: list    # -- 작업중 --
+    actions: list           
+    rag_references: list    
     errors: List[str]
 ```
 
@@ -306,13 +306,15 @@ aegis-ai-agent/src/
 │   ├── nodes/             # 📄 그래프의 각 '단계' (기능별 파일 분리)
 │   │   ├── __init__.py
 │   │   ├── vlm_analysis.py       # 1. VLM 1차 분석
-│   │   ├── precision_analysis.py # 2. 정밀 분석 (LLM)
-│   │   ├── update_backend.py     # 3. 백엔드 갱신
-│   │   └── generate_report.py    # 4. RAG 기반 최종 보고서 생성
+│   │   ├── backend_report.py     # 2. 1차 백엔드 보고
+│   │   ├── verification.py       # 3. 추가 검증
+│   │   ├── precision_analysis.py # 4. 정밀 분석 (LLM)
+│   │   ├── update_backend.py     # 5. 백엔드 상세 갱신
+│   │   └── generate_report.py    # 6. RAG 기반 최종 보고서 생성
 │   │
 │   └── edges/             # ↪️ 그래프의 '흐름 제어'
 │       ├── __init__.py
-│       └── routers.py     # - 조건부 분기 로직
+│       └── routers.py     # - 조건부 분기 로직 (analysis_router, verification_router)
 │
 ├── retrieval/             # 📚 RAG 및 검색 관련 기능
 │   ├── __init__.py

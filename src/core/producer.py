@@ -37,7 +37,7 @@ class FrameProducer(threading.Thread):
         self.camera_info = camera_info
         self.camera_id = camera_info.get('id', 'unknown')
         self.camera_name = camera_info.get('name', 'unknown')
-        self.rtsp_url = f"rtsp://{config.rtsp_host}:{config.rtsp_port}/{self.camera_id}"
+        self.rtsp_url = f"rtsp://{config.rtsp_host}:{config.rtsp_port}/{self.camera_name}"
         self.config = config
         self.frame_callback = frame_callback
         self.global_shutdown_event = shutdown_event

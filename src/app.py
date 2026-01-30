@@ -2,10 +2,9 @@
 AEGIS AI Agent의 메인 진입점 - LangGraph 기반 분석 파이프라인
 """
 import argparse
-import sys
 import threading
 import time
-from typing import List, Dict
+from typing import Dict
 
 from .config import Config
 from .utils import setup_logging, setup_signal_handlers
@@ -14,7 +13,7 @@ from .core.windowing import WindowManager
 from .core.producer import FrameProducer
 from .core.consumer import ConsumerPool
 from .core.redis_manager import RedisManager
-from .api.mock_server import MockVLMServer, MockPrecisionServer
+from .api.mock_server import MockVLMServer, MockPrecisionServer, MockBackendServer
 
 
 class AegisAgent:
@@ -54,11 +53,13 @@ class AegisAgent:
         # 모의 서버 스레드
         self.mock_vlm_server_thread = None
         self.mock_precision_server_thread = None
+        self.mock_backend_server_thread = None # 백엔드 목 서버 스레드 추가
 
     def start(self):
         """모든 컴포넌트를 시작합니다."""
         self.logger.info("=" * 80)
         self.logger.info("AEGIS AI Agent - LangGraph 기반 분석 파이프라인")
+        self.logger.info(f"실행 모드: {'모의(Mock)' if self.config.mock_mode else '실제(Real)'}")
         self.logger.info("=" * 80)
 
         if self.config.mock_mode:
@@ -73,17 +74,26 @@ class AegisAgent:
         self.logger.info("시스템이 실행 중입니다. Redis 업데이트를 수신 대기합니다. 중지하려면 Ctrl+C를 누르세요.")
 
     def _start_mock_servers(self):
-        """모의 모드에서 모의 VLM 및 정밀 분석 서버를 시작합니다."""
+        """모의 모드에서 모든 모의 서버를 시작합니다."""
+        # VLM 모의 서버
         self.logger.info(f"모의 VLM 서버를 {self.config.mock_vlm_port} 포트에서 시작합니다.")
         mock_vlm_server = MockVLMServer(self.config.mock_vlm_port)
         self.mock_vlm_server_thread = threading.Thread(target=mock_vlm_server.run, daemon=True)
         self.mock_vlm_server_thread.start()
 
+        # 정밀 분석 모의 서버
         self.logger.info(f"모의 정밀 분석 서버를 {self.config.mock_precision_port} 포트에서 시작합니다.")
         mock_precision_server = MockPrecisionServer(self.config.mock_precision_port)
         self.mock_precision_server_thread = threading.Thread(target=mock_precision_server.run, daemon=True)
         self.mock_precision_server_thread.start()
-        time.sleep(2)
+
+        # 백엔드 모의 서버 (추가)
+        self.logger.info(f"모의 백엔드 서버를 {self.config.mock_backend_port} 포트에서 시작합니다.")
+        mock_backend_server = MockBackendServer(self.config.mock_backend_port)
+        self.mock_backend_server_thread = threading.Thread(target=mock_backend_server.run, daemon=True)
+        self.mock_backend_server_thread.start()
+        
+        time.sleep(2) # 서버가 시작될 때까지 잠시 대기
 
     def _update_producers(self):
         """
@@ -92,7 +102,6 @@ class AegisAgent:
         with self.producer_lock:
             self.logger.info("Redis 카메라 목록을 기반으로 프로듀서를 업데이트합니다...")
             try:
-                # Redis에서 가져온 카메라 정보를 {id: {id, name, location}} 형태의 딕셔너리로 변환
                 target_cameras_list = self.redis_manager.get_analysis_cameras()
                 target_cameras = {cam['id']: cam for cam in target_cameras_list if 'id' in cam}
                 
@@ -142,9 +151,8 @@ class AegisAgent:
         """시스템 통계를 기록합니다."""
         self.logger.info("=" * 20 + " 시스템 통계 " + "=" * 20)
         self.logger.info(f"실행 중인 프로듀서 수: {len(self.producers)}")
-        # 필요한 경우 여기에 다른 통계 로깅 추가 (예: 컨슈머, 큐)
+        self.logger.info(f"작업 큐 크기: {self.queue_manager.size()}")
         self.logger.info("=" * 50)
-
 
     def shutdown(self):
         """모든 컴포넌트를 정상적으로 종료합니다."""
@@ -174,23 +182,27 @@ def parse_args():
     """커맨드 라인 인자를 파싱합니다."""
     parser = argparse.ArgumentParser(description="AEGIS AI Agent - LangGraph 기반 분석 파이프라인")
     parser.add_argument("--workers", type=int, help="컨슈머 워커 스레드 수")
-    # CLI에서 오버라이드해야 하는 다른 관련 인자를 Config에서 추가
-    parser.add_argument("--mock", action="store_true", help="모의 서버 활성화")
-    parser.add_argument("--log-level", type=str, default="INFO", help="로깅 레벨")
+    parser.add_argument("--no-mock", dest="mock", action="store_false", help="모의 서버 비활성화")
+    parser.add_argument("--log-level", type=str, help="로깅 레벨 (DEBUG, INFO, WARNING, ERROR)")
+    parser.set_defaults(mock=True)
     return parser.parse_args()
 
 
 def main():
     """메인 진입점"""
     args = parse_args()
+    
+    # Config 객체 생성 시 CLI 인자 전달
     config = Config()
-
-    # 제공된 경우 CLI 인자로 설정 오버라이드
     if args.workers:
         config.num_workers = args.workers
-    if args.mock:
-        config.mock_mode = True
-    config.log_level = args.log_level
+    if not args.mock:
+        config.mock_mode = False
+    if args.log_level:
+        config.log_level = args.log_level.upper()
+    
+    # mock_mode 값에 따라 엔드포인트가 동적으로 설정되도록 __post_init__ 호출
+    config.__post_init__()
 
     agent = AegisAgent(config)
     agent.run()
