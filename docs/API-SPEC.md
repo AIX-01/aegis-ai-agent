@@ -468,26 +468,6 @@ SSE 스트림 연결 (인증 필요)
 
 ---
 
-### GET /internal/agent/cameras/analysis
-
-분석 대상 카메라 조회 (Agent → Spring)
-
-**Response:** `200 OK`
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| cameras | AnalysisCamera[] | enabled && analysisEnabled인 카메라 |
-
-**AnalysisCamera:**
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| id | string | 카메라 ID |
-| name | string | 카메라 이름 |
-| enabled | boolean | 활성화 |
-| analysisEnabled | boolean | 분석 활성화 |
-
----
 
 ### POST /internal/agent/events
 
