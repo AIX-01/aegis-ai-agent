@@ -313,41 +313,9 @@ SSE 스트림 연결 (인증 필요)
 
 ---
 
-### GET /api/notifications/unread-count
+### DELETE /api/notifications
 
-읽지 않은 알림 수 (인증 필요)
-
-**Response:** `200 OK`
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| count | number | 읽지 않은 수 |
-
----
-
-### PATCH /api/notifications/{id}/read
-
-알림 읽음 처리 (인증 필요)
-
-**Response:** `200 OK` → Notification
-
----
-
-### POST /api/notifications/read-all
-
-전체 읽음 처리 (인증 필요)
-
-**Response:** `200 OK`
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| success | boolean | true |
-
----
-
-### DELETE /api/notifications/{id}
-
-알림 삭제 (인증 필요)
+전체 알림 삭제 (인증 필요)
 
 **Response:** `200 OK`
 
