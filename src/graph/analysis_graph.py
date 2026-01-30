@@ -6,6 +6,7 @@ from .nodes import (
     backend_report_node,
     verification_node,
     precision_analysis_node,
+    action_node,
     update_backend_node,
     generate_report_node
 )
@@ -42,6 +43,7 @@ def build_graph(config: Config):
     workflow.add_node("backend_report", backend_report)
     workflow.add_node("verification", verification_node)
     workflow.add_node("precision_analysis", precision_analysis)
+    workflow.add_node("action", action_node) # 대응 조치 노드 추가
     workflow.add_node("update_backend", update_backend)
     workflow.add_node("generate_report", generate_report_node)
 
@@ -70,8 +72,10 @@ def build_graph(config: Config):
         }
     )
 
+    # 정밀 분석 -> 백엔드 갱신 -> 대응 조치 -> 리포트 생성 -> 종료
     workflow.add_edge("precision_analysis", "update_backend")
-    workflow.add_edge("update_backend", "generate_report")
+    workflow.add_edge("update_backend", "action")
+    workflow.add_edge("action", "generate_report")
     workflow.add_edge("generate_report", END)
 
     # 그래프 컴파일
