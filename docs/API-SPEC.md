@@ -169,6 +169,18 @@
 
 ---
 
+### GET /api/cameras/all
+
+카메라 전체 목록 조회 (인증 필요, 멤버 관리 - 카메라 할당용)
+
+**정렬:** connected DESC → enabled DESC → location ASC
+
+**권한:** ADMIN은 전체, USER는 할당된 카메라만
+
+**Response:** `200 OK` → Camera[]
+
+---
+
 ### GET /api/cameras/{id}
 
 카메라 상세 조회 (인증 필요)
