@@ -142,13 +142,30 @@
 
 ### GET /api/cameras
 
-카메라 목록 조회 (인증 필요)
+카메라 목록 조회 (인증 필요, 페이지네이션)
+
+**Query Parameters:**
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|----------|------|--------|------|
+| page | number | 0 | 페이지 번호 (0부터 시작) |
+| size | number | 9 | 페이지 크기 |
 
 **정렬:** connected DESC → enabled DESC → location ASC
 
 **권한:** ADMIN은 전체, USER는 할당된 카메라만
 
-**Response:** `200 OK` → Camera[]
+**Response:** `200 OK` → PageResponse\<Camera\>
+
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| content | Camera[] | 카메라 목록 |
+| page | number | 현재 페이지 |
+| size | number | 페이지 크기 |
+| totalElements | number | 전체 개수 |
+| totalPages | number | 전체 페이지 수 |
+| first | boolean | 첫 페이지 여부 |
+| last | boolean | 마지막 페이지 여부 |
 
 ---
 
