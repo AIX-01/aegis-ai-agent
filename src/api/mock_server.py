@@ -5,7 +5,7 @@ import logging
 import random
 import uuid
 from typing import List, Union, Literal, Optional
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from pydantic import BaseModel
 import uvicorn
 
@@ -26,9 +26,9 @@ class VLMAnalysisRequest(BaseModel):
     window_end: Union[int, str]
 
 class VLMAnalysisResponse(BaseModel):
-    status: str
-    camera_id: str
-    risk_level: RiskLevel
+    # VLM 서버는 primary/secondary category를 반환
+    primary_category: RiskLevel
+    secondary_category: str
     confidence: float
     description: str
 
@@ -46,35 +46,29 @@ class PrecisionAnalysisRequest(BaseModel):
     vlm_result: dict
 
 class PrecisionAnalysisResponse(BaseModel):
-    status: str
-    camera_id: str
+    risk: RiskLevel
     event_type: EventType
     summary: str
     risk_score: float
 
 
 # =========================
-# 백엔드 서버 모델 (신규 추가)
+# 백엔드 서버 모델 (DATA-MODEL.md 기준)
 # =========================
-class VLMResultPayload(BaseModel):
-    cameraId: str
-    timestamp: str
-    windowStart: str
-    windowEnd: str
-    primaryCategory: str
-    secondaryCategory: Optional[str] = ""
-    confidence: float
-    description: str
+class EventCreationRequest(BaseModel):
+    camera_id: str
+    risk: RiskLevel
+    type: str
+    occurred_at: str
 
-class BackendInitialResponse(BaseModel):
-    eventId: str
-    message: str
+class EventCreationResponse(BaseModel):
+    event_id: str
 
-class EventUpdatePayload(BaseModel):
-    eventId: str
-    eventType: Optional[str] = None
+class EventUpdateRequest(BaseModel):
+    risk: Optional[RiskLevel] = None
+    type: Optional[EventType] = None
     summary: Optional[str] = None
-    riskScore: Optional[float] = None
+    risk_score: Optional[str] = None # VARCHAR(10)
 
 
 # =========================
@@ -95,11 +89,20 @@ class MockVLMServer:
             if rand < 0.15: risk_level = "ABNORMAL"
             elif rand < 0.30: risk_level = "SUSPICIOUS"
             else: risk_level = "NORMAL"
+            
+            secondary_category = "폭행 의심" if risk_level == "ABNORMAL" else "배회" if risk_level == "SUSPICIOUS" else ""
             confidence = random.uniform(0.75, 0.95)
             description = f"모의 VLM 분석: {risk_level} 감지"
+            
             if risk_level in ["ABNORMAL", "SUSPICIOUS"]:
                 self.logger.info(f"[트리거 활성화!] VLM이 {risk_level} 감지 - 카메라: {request.camera_id}, 신뢰도: {confidence:.2f}")
-            return VLMAnalysisResponse(status="success", camera_id=request.camera_id, risk_level=risk_level, confidence=confidence, description=description)
+            
+            return VLMAnalysisResponse(
+                primary_category=risk_level,
+                secondary_category=secondary_category,
+                confidence=confidence,
+                description=description,
+            )
 
         @self.app.get("/health")
         async def health():
@@ -129,12 +132,21 @@ class MockPrecisionServer:
                 event_type = random.choice(["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"])
                 summary = f"모의 정밀 분석 결과: {event_type} 이벤트가 감지되었습니다."
                 risk_score = random.uniform(0.8, 1.0)
+                risk = "ABNORMAL"
             else:
                 event_type = "UNKNOWN"
                 summary = "정상 상황으로 판단되어 정밀 분석을 수행하지 않았습니다."
                 risk_score = random.uniform(0.0, 0.2)
+                risk = "NORMAL"
+            
             self.logger.info(f"\n{'='*80}\n[정밀 분석 결과] 카메라: {request.camera_id}, VLM 트리거: {vlm_risk_level.upper()}, 분석 결과: {event_type} (점수: {risk_score:.2f})\n{'='*80}\n")
-            return PrecisionAnalysisResponse(status="success", camera_id=request.camera_id, event_type=event_type, summary=summary, risk_score=risk_score)
+            
+            return PrecisionAnalysisResponse(
+                risk=risk,
+                event_type=event_type,
+                summary=summary,
+                risk_score=risk_score,
+            )
 
         @self.app.get("/health")
         async def health():
@@ -146,30 +158,31 @@ class MockPrecisionServer:
 
 
 # =========================
-# 백엔드 모의 서버 (신규 추가)
+# 백엔드 모의 서버 (DATA-MODEL.md 기준)
 # =========================
 class MockBackendServer:
     """스프링부트 백엔드 모의 서버"""
-    def __init__(self, port: int = 8080):
+    def __init__(self, port: int = 8088):
         self.port = port
         self.logger = logging.getLogger("aegis-agent.mock_backend")
         self.app = FastAPI(title="AEGIS 모의 백엔드 서버")
         self._setup_routes()
 
     def _setup_routes(self):
-        # 1차 VLM 결과 보고 및 eventId 생성
-        @self.app.post("/api/vlm-results", response_model=BackendInitialResponse)
-        async def create_event(payload: VLMResultPayload):
+        # 1차 분석: 이벤트 생성
+        @self.app.post("/api/vlm-results", response_model=EventCreationResponse, status_code=status.HTTP_201_CREATED)
+        async def create_event(payload: EventCreationRequest):
             event_id = str(uuid.uuid4())
-            self.logger.info(f"[백엔드 수신] 1차 VLM 결과 수신 (카메라: {payload.cameraId}). Event ID: {event_id} 생성.")
-            return BackendInitialResponse(eventId=event_id, message="Event created successfully")
+            self.logger.info(f"[백엔드 수신] 1차 분석 결과 수신 (카메라: {payload.camera_id}). Event ID: {event_id} 생성.")
+            self.logger.info(f"  - 데이터: risk='{payload.risk}', type='{payload.type}', occurred_at='{payload.occurred_at}'")
+            return EventCreationResponse(event_id=event_id)
 
-        # 2차 정밀 분석 결과 갱신
-        @self.app.put("/api/vlm-results/{event_id}")
-        async def update_event(event_id: str, payload: EventUpdatePayload):
-            risk_score_str = f"{payload.riskScore:.2f}" if payload.riskScore is not None else "N/A"
-            self.logger.info(f"[백엔드 갱신] 정밀 분석 결과 수신 (Event ID: {event_id}). EventType: {payload.eventType}, RiskScore: {risk_score_str}")
-            return {"message": f"Event {event_id} updated successfully"}
+        # 2차 분석: 이벤트 갱신
+        @self.app.put("/api/vlm-results/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+        async def update_event(event_id: str, payload: EventUpdateRequest):
+            self.logger.info(f"[백엔드 갱신] 2차 분석 결과 수신 (Event ID: {event_id}).")
+            self.logger.info(f"  - 데이터: {payload.model_dump_json(exclude_unset=True)}")
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
 
         @self.app.get("/health")
         async def health():

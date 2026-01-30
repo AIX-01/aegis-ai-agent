@@ -14,70 +14,88 @@
 
 ---
 
-## 🚀 실행 모드 설정
+## 🧩 주요 컴포넌트 역할
 
-에이전트는 **모의(Mock) 서버 모드**와 **실제(Real) 서버 모드** 두 가지로 실행할 수 있습니다. `src/config.py` 파일의 설정을 변경하여 모드를 전환합니다.
+이 에이전트는 여러 컴포넌트가 협력하여 동작하며, 각 컴포넌트는 다음과 같은 역할을 수행합니다.
 
-### 1. 모의(Mock) 서버 모드 (개발 및 테스트용)
+- **`Producer` (수집가)**: RTSP 카메라 영상을 쉬지 않고 바라보며, 프레임(사진)을 하나씩 캡처하는 역할.
+- **`WindowManager` (정리 전문가)**: 수집가가 가져온 낱장의 사진들을 의미 있는 단위(예: 8초 분량의 영상 클립)로 묶어주는 역할.
+- **`QueueManager` (작업 대기열)**: 정리된 영상 클립들을 분석가에게 전달하기 전, 순서대로 쌓아두는 컨베이어 벨트.
+- **`Consumer` & `LangGraph` (분석가 팀)**: 컨베이어 벨트에서 영상 클립을 하나씩 가져와, LangGraph라는 정해진 시나리오(VLM 분석 -> 이상하면 정밀 분석)에 따라 분석을 수행하는 핵심 두뇌.
+- **`RedisManager` (관제탑)**: "이제부터 1번, 3번 카메라를 감시해!" 와 같이 외부(백엔드)의 지시를 받아, 어떤 수집가(`Producer`)를 일하게 할지 동적으로 관리.
+- **`Clients` (통신 담당)**: VLM, LLM, 백엔드 등 외부 전문가(서버)에게 "이 영상 분석해주세요"라고 요청하고 답변을 받아오는 역할.
 
-외부 AI/백엔드 서버 없이 에이전트의 전체 파이프라인 동작을 테스트하기 위한 모드입니다.
+---
 
-#### ⚙️ 설정 방법
-1.  `src/config.py` 파일을 엽니다.
-2.  `mock_mode` 값을 `True`로 설정합니다.
+## 🚀 실행 방법
 
-    ```python
-    # config.py
-    @dataclass
-    class Config:
-        # ...
-        # Mock 서버
-        mock_mode: bool = True  # <--- 이 값을 True로 설정
-        # ...
-    ```
+에이전트는 **모의(Mock) 서버 모드**와 **실제(Real) 서버 모드** 두 가지로 실행할 수 있습니다.
+
+### 1. 모의(Mock) 서버 모드 (기본값, 개발 및 테스트용)
+
+외부 AI/백엔드 서버 없이 에이전트의 전체 파이프라인 동작을 테스트하기 위한 모드입니다. 별도의 옵션 없이 실행하면 기본적으로 이 모드로 동작합니다.
+
+#### ✅ 실행 명령어
+
+```sh
+# 프로젝트 루트 폴더에서 실행
+python -m src.app
+```
 
 #### ✅ 동작 방식
-- `app.py` 실행 시, 에이전트가 자체적으로 VLM, 정밀 분석, 백엔드 서버를 흉내 내는 **모의 서버를 함께 실행**합니다.
+- 에이전트가 자체적으로 VLM, 정밀 분석, 백엔드 서버를 흉내 내는 **모의 서버를 함께 실행**합니다.
 - 에이전트는 `localhost`의 모의 서버와 통신하며, 모의 서버는 무작위로 분석 결과를 생성하여 반환합니다.
-- 실제 AI 모델 없이도 LangGraph의 조건부 분기를 포함한 전체 워크플로우를 테스트할 수 있습니다.
+- `config.py`의 `mock_vlm_port`, `mock_precision_port`, `mock_backend_port`에 설정된 포트를 사용합니다.
 
 ### 2. 실제(Real) 서버 모드 (통합 및 운영용)
 
 실제 VLM, LLM, 백엔드 서버와 연동하여 시스템 전체를 운영할 때 사용합니다.
 
-#### ⚙️ 설정 방법
-1.  `src/config.py` 파일을 엽니다.
-2.  `mock_mode` 값을 `False`로 변경합니다.
-3.  **각 실제 서버의 주소에 맞게 엔드포인트(endpoint) 설정을 모두 수정합니다.**
+#### ✅ 실행 명령어
+
+`--no-mock` 플래그를 추가하여 실행합니다.
+
+```sh
+# 프로젝트 루트 폴더에서 실행
+python -m src.app --no-mock
+```
+
+#### ✅ 사전 설정
+1.  **`src/config.py` 파일을 열어 실제 서버 주소를 모두 수정해야 합니다.**
 
     ```python
     # config.py
     @dataclass
     class Config:
         # ...
-        # 실제 서버 주소로 변경
-        vlm_endpoint: str = "http://<실제 VLM 서버 IP>:8001/analyze"
-        precision_endpoint: str = "http://<실제 LLM 서버 IP>:8002/precision_analyze"
-        backend_endpoint: str = "http://<실제 백엔드 서버 IP>:8080/api/vlm-results"
-        # ...
-        # Mock 서버 비활성화
-        mock_mode: bool = False  # <--- 이 값을 False로 설정
+        # 실제 운영 서버 주소로 변경
+        vlm_endpoint: str = "http://123.45.67.89:8001/analyze"
+        precision_endpoint: str = "http://123.45.67.89:8002/precision_analyze"
+        backend_endpoint: str = "http://123.45.67.89:8080/api/vlm-results"
         # ...
     ```
 
 #### ✅ 동작 방식
-- `app.py` 실행 시, `mock_mode`가 `False`이므로 모의 서버를 실행하지 않습니다.
+- `--no-mock` 플래그로 인해 모의 서버를 실행하지 않습니다.
 - 에이전트는 `config.py`에 설정된 **실제 서버 주소**로 HTTP 요청을 보냅니다.
 
+---
+
 ### 실행 전 공통 준비 사항
+
 어떤 모드로 실행하든 아래 사항은 준비되어야 합니다.
-1.  **Redis 서버**: `config.py`에 설정된 주소에서 실행 중이어야 합니다.
-2.  **Redis 데이터**: `redis-cli`를 사용하여 분석할 카메라 정보를 `analysis:cameras` 키에 등록해야 합니다.
+
+1.  **의존성 설치**:
     ```sh
-    # 예시: streamid가 cam1인 카메라 정보 등록
+    pip install -r requirements.txt
+    ```
+2.  **Redis 서버**: `config.py`에 설정된 주소에서 실행 중이어야 합니다.
+3.  **Redis 데이터**: `redis-cli`를 사용하여 분석할 카메라 정보를 `analysis:cameras` 키에 등록해야 합니다.
+    ```sh
+    # 예시: 'cam1'이라는 이름의 RTSP 스트림을 분석 대상으로 등록
     SADD analysis:cameras '{"id": "564f809f-ed8a-4a2a-8109-8efc033d9787", "name": "cam1", "location": "Office"}'
     ```
-3.  **영상 소스**: Redis에 등록한 `camera_name`에 해당하는 RTSP 스트림 또는 로컬 비디오 파일이 필요합니다.
+4.  **영상 소스**: Redis에 등록한 `camera_name`에 해당하는 RTSP 스트림 또는 로컬 비디오 파일이 필요합니다.
 
 ---
 
@@ -161,9 +179,9 @@ graph TD
         N1 --> D_Risk[("Risk Level<br>(NORMAL / SUSPICIOUS / ABNORMAL)")]:::data
         D_Risk --> N2["11. backend_report<br>(1차 백엔드 보고)"]:::proc
         
-        N2 -.-> D_Req1[("Request<br>• camera_id<br>• risk_level<br>• occurred_at")]:::data
+        N2 -.-> D_Req1[("Request (Payload)<br>• camera_id<br>• risk<br>• type<br>• occurred_at")]:::data
         D_Req1 -.-> Backend["스프링부트 백엔드"]:::ext
-        Backend -.-> D_Res1[("Response<br>• event_id")]:::data
+        Backend -.-> D_Res1[("Response<br>• eventId")]:::data
         D_Res1 -.-> N2
         
         N2 --> Router{"12. analysis_router"}:::router
@@ -179,7 +197,7 @@ graph TD
         N_Precise --> D_Detail[("상세 분석 결과<br>• EventType<br>• Summary<br>• RiskScore")]:::data
         D_Detail --> N_Update["15. update_backend<br>(상세 결과 갱신)"]:::proc
         
-        N_Update -.-> D_Req2[("Request<br>• event_id<br>• event_type<br>• summary<br>• risk_score")]:::data
+        N_Update -.-> D_Req2[("Request<br>• eventId<br>• eventType<br>• summary<br>• riskScore")]:::data
         D_Req2 -.-> Backend
         
         N_Update --> N7["16. generate_report<br>(최종 보고서 생성)"]:::proc
@@ -207,7 +225,7 @@ graph TD
     *   `vlm_client`를 사용하여 VLM 서버에 프레임 묶음을 전송합니다.
     *   결과로 `risk_level` ('NORMAL', 'SUSPICIOUS', 'ABNORMAL')을 도출하여 `AnalysisState`에 저장합니다.
 11. **1차 백엔드 보고 (노드: `backend_report`)**:
-    *   `backend_client`를 사용하여 1차 분석 결과(`camera_id`, `risk_level`, `occurred_at`)를 **스프링부트 백엔드**로 전송합니다.
+    *   `backend_client`를 사용하여 1차 분석 결과(`camera_id`, `risk`, `type`, `occurred_at`)를 **스프링부트 백엔드**로 전송합니다.
     *   백엔드로부터 고유한 **`event_id`**를 응답받아 `AnalysisState`에 저장합니다.
 12. **조건부 분기 (엣지: `analysis_router`)**:
     *   `AnalysisState`의 `risk_level`을 확인하여 다음 경로를 결정합니다.
