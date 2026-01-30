@@ -37,7 +37,7 @@
     ```
 
 #### ✅ 동작 방식
-- `app.py` 실행 시, 에이전트가 자체적으로 VLM과 정밀 분석 서버를 흉내 내는 **모의 서버를 함께 실행**합니다.
+- `app.py` 실행 시, 에이전트가 자체적으로 VLM, 정밀 분석, 백엔드 서버를 흉내 내는 **모의 서버를 함께 실행**합니다.
 - 에이전트는 `localhost`의 모의 서버와 통신하며, 모의 서버는 무작위로 분석 결과를 생성하여 반환합니다.
 - 실제 AI 모델 없이도 LangGraph의 조건부 분기를 포함한 전체 워크플로우를 테스트할 수 있습니다.
 
@@ -74,10 +74,10 @@
 1.  **Redis 서버**: `config.py`에 설정된 주소에서 실행 중이어야 합니다.
 2.  **Redis 데이터**: `redis-cli`를 사용하여 분석할 카메라 정보를 `analysis:cameras` 키에 등록해야 합니다.
     ```sh
-    # 예시: streamid가 local_video인 카메라 정보 등록
-    SADD analysis:cameras '{"id": "local_video", "name": "Test Cam", "location": "Office"}'
+    # 예시: streamid가 cam1인 카메라 정보 등록
+    SADD analysis:cameras '{"id": "564f809f-ed8a-4a2a-8109-8efc033d9787", "name": "cam1", "location": "Office"}'
     ```
-3.  **영상 소스**: Redis에 등록한 `camera_id`에 해당하는 RTSP 스트림 또는 로컬 비디오 파일이 필요합니다.
+3.  **영상 소스**: Redis에 등록한 `camera_name`에 해당하는 RTSP 스트림 또는 로컬 비디오 파일이 필요합니다.
 
 ---
 
