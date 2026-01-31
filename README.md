@@ -372,3 +372,43 @@ RUN pip install -r requirements.txt
 COPY src/ ./src/
 CMD ["python", "-m", "src.app"]
 ```
+
+---
+
+## 🔧 알려진 이슈
+
+### 🔴 Backend API 연동 불일치 (Critical)
+
+**파일들**: `config.py`, `backend_client.py`, `mock_server.py`
+
+현재 Backend 클라이언트가 실제 Backend API 스펙과 일치하지 않아, Mock 모드에서만 정상 동작합니다.
+
+| 항목 | 현재 값 | Backend 실제 값 |
+|------|---------|----------------|
+| 이벤트 생성 경로 | `/api/vlm-results` | `/internal/agent/events` |
+| 이벤트 갱신 경로 | `PUT /api/vlm-results/{id}` | `PATCH /internal/agent/events/{id}/analysis` |
+| 필드명 (카메라) | `camera_id` | `cameraId` |
+| 필드명 (시각) | `occurred_at` | `occurredAt` |
+
+**해결 방안**:
+
+```python
+# config.py
+_real_backend_endpoint: str = "http://<백엔드>:8080/internal/agent/events"
+
+# backend_client.py - send_vlm_result()
+payload = {
+    "cameraId": camera_id,      # camera_id → cameraId
+    "risk": risk,
+    "type": type,
+    "occurredAt": occurred_at,  # occurred_at → occurredAt
+}
+
+# backend_client.py - update_event()
+# PUT → PATCH, 경로 변경
+update_endpoint = f"{base_url}/{event_id}/analysis"
+response = requests.patch(update_endpoint, ...)
+
+# mock_server.py
+# /api/vlm-results → /internal/agent/events
+```
