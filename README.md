@@ -100,6 +100,12 @@ _real_precision_endpoint: str = "http://<LLM 서버>:8002/precision_analyze"
 _real_backend_endpoint: str = "http://<백엔드>:8080/api/vlm-results"
 ```
 
+> **주의**: 현재 `backend_client.py`는 Mock 서버용 API를 사용합니다.  
+> 실제 Backend API와 연동하려면 다음 수정이 필요합니다:
+> - 경로: `/api/vlm-results` → `/internal/agent/events`
+> - 이벤트 업데이트: `PUT` → `PATCH /internal/agent/events/{id}/analysis`
+> - 필드명: `camera_id` → `cameraId`, `occurred_at` → `occurredAt`
+
 ### Mock 서버 포트
 
 | 서버 | 포트 |
