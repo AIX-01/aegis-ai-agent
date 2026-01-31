@@ -276,18 +276,20 @@ class AnalysisState(TypedDict):
 
 - 엔드포인트: `/analyze`
 - 입력: base64 인코딩된 프레임 배열
-- 출력: `{ category, confidence, description }`
+- 출력: `{ primary_category, secondary_category, confidence, description }`
 
 ### PrecisionClient
 
 - 엔드포인트: `/precision_analyze`
 - 입력: 프레임 + VLM 결과
-- 출력: `{ event_type, summary, risk_score, actions, report }`
+- 출력: `{ risk, event_type, summary, risk_score }`
 
 ### BackendClient
 
 - 이벤트 생성: `POST /internal/agent/events`
 - 분석 결과 업데이트: `PATCH /internal/agent/events/{id}/analysis`
+
+> **주의**: 위 경로는 Backend API 스펙입니다. 현재 `backend_client.py`는 Mock 서버용 `/api/vlm-results` 경로를 사용하므로, 실제 Backend 연동 시 코드 수정이 필요합니다. (상단 "실제 서버 주소" 섹션 참조)
 
 ## Redis 연동
 
