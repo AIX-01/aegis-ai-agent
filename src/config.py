@@ -17,7 +17,11 @@ class Config:
     # ===================================================================
     _real_vlm_endpoint: str = "http://<실제 VLM 서버 IP>:8001/analyze"
     _real_precision_endpoint: str = "http://<실제 LLM 서버 IP>:8002/precision_analyze"
-    _real_backend_endpoint: str = "http://<실제 백엔드 서버 IP>:8080/api/vlm-results"
+    
+    # 백엔드 엔드포인트 분리 (생성용 / 갱신용)
+    # 갱신용 URL에는 {event_id} 플레이스홀더를 사용할 수 있습니다.
+    _real_backend_create_endpoint: str = "http://<실제 백엔드 서버 IP>:8080/api/vlm-results"
+    _real_backend_update_endpoint: str = "http://<실제 백엔드 서버 IP>:8080/api/vlm-results/{event_id}"
 
     # ===================================================================
     # >> 2. 모드 설정 (이 값만 True/False로 변경하여 모드를 전환하세요)
@@ -25,13 +29,26 @@ class Config:
     # True: 내장된 모의 서버 사용 (로컬 테스트용)
     # False: 위에 설정한 실제 서버 주소 사용 (운영용)
     mock_mode: bool = True
+    
+    # 개별 컴포넌트의 실제 서버 사용 여부 (기본값: False -> Mock 사용)
+    # app.py에서 CLI 인자에 따라 동적으로 설정됩니다.
+    real_vlm: bool = False
+    real_precision: bool = False
+    real_backend: bool = False
 
     # ===================================================================
     # >> 3. 활성 엔드포인트 (수정 금지 - __post_init__에서 자동 설정됨)
     # ===================================================================
     vlm_endpoint: str = field(init=False)
     precision_endpoint: str = field(init=False)
-    backend_endpoint: str = field(init=False)
+    backend_create_endpoint: str = field(init=False) # 분리됨
+    backend_update_endpoint: str = field(init=False) # 분리됨
+
+    # =========================================
+    # 에이전트 API 서버 설정 (FastAPI)
+    # =========================================
+    agent_api_host: str = "0.0.0.0"
+    agent_api_port: int = 8000
 
     # =========================================
     # 모의 서버 포트 설정 (mock_mode=True일 때 사용)
@@ -93,16 +110,29 @@ class Config:
     def __post_init__(self):
         """
         초기화 후 실행되는 로직.
-        mock_mode 값에 따라 활성 엔드포인트를 동적으로 설정합니다.
+        mock_mode 및 개별 real_* 플래그 값에 따라 활성 엔드포인트를 동적으로 설정합니다.
         """
-        if self.mock_mode:
-            self.vlm_endpoint = f"http://localhost:{self.mock_vlm_port}/analyze"
-            self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
-            self.backend_endpoint = f"http://localhost:{self.mock_backend_port}/api/vlm-results"
-        else:
+        # VLM 엔드포인트 설정
+        if self.real_vlm:
             self.vlm_endpoint = self._real_vlm_endpoint
+        else:
+            self.vlm_endpoint = f"http://localhost:{self.mock_vlm_port}/analyze"
+
+        # 정밀 분석 엔드포인트 설정
+        if self.real_precision:
             self.precision_endpoint = self._real_precision_endpoint
-            self.backend_endpoint = self._real_backend_endpoint
+        else:
+            self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
+
+        # 백엔드 엔드포인트 설정 (생성/갱신 분리)
+        if self.real_backend:
+            self.backend_create_endpoint = self._real_backend_create_endpoint
+            self.backend_update_endpoint = self._real_backend_update_endpoint
+        else:
+            # Mock 서버는 RESTful 규칙을 따르므로 기본 경로 설정
+            base_url = f"http://localhost:{self.mock_backend_port}/api/vlm-results"
+            self.backend_create_endpoint = base_url
+            self.backend_update_endpoint = f"{base_url}/{{event_id}}"
 
 # =========================================
 # 분석 트리거 상수

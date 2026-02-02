@@ -23,7 +23,10 @@ class BackendClient:
         self.config = config
         self.logger = logging.getLogger("aegis-agent.backend")
 
-        self.endpoint = config.backend_endpoint
+        # 엔드포인트 분리
+        self.create_endpoint = config.backend_create_endpoint
+        self.update_endpoint_template = config.backend_update_endpoint
+        
         self.timeout = config.backend_timeout
         self.max_retries = config.backend_max_retries
         self.retry_delay = config.backend_retry_delay
@@ -57,7 +60,7 @@ class BackendClient:
         for attempt in range(self.max_retries):
             try:
                 response = requests.post(
-                    self.endpoint,
+                    self.create_endpoint, # 생성용 엔드포인트 사용
                     json=payload,
                     timeout=self.timeout,
                     headers={"Content-Type": "application/json"},
@@ -104,7 +107,8 @@ class BackendClient:
         Returns:
             성공 여부
         """
-        update_endpoint = f"{self.endpoint}/{event_id}"
+        # 갱신용 엔드포인트 템플릿에 event_id 적용
+        update_endpoint = self.update_endpoint_template.format(event_id=event_id)
         
         risk_score = detail_result.get("risk_score")
         

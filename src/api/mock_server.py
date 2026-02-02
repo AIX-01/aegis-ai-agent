@@ -26,11 +26,8 @@ class VLMAnalysisRequest(BaseModel):
     window_end: Union[int, str]
 
 class VLMAnalysisResponse(BaseModel):
-    # VLM 서버는 primary/secondary category를 반환
-    primary_category: RiskLevel
-    secondary_category: str
-    confidence: float
-    description: str
+    risk_level: RiskLevel
+    event_type: EventType
 
 
 # =========================
@@ -40,7 +37,7 @@ class PrecisionAnalysisRequest(BaseModel):
     camera_id: str
     frames: List[str]
     num_frames: int
-    timestamp: str
+    occurred_at: str # timestamp 대신 occurred_at 사용
     window_start: Union[int, str]
     window_end: Union[int, str]
     vlm_result: dict
@@ -86,22 +83,18 @@ class MockVLMServer:
         @self.app.post("/analyze", response_model=VLMAnalysisResponse)
         async def analyze(request: VLMAnalysisRequest):
             rand = random.random()
-            if rand < 0.15: risk_level = "ABNORMAL"
-            elif rand < 0.30: risk_level = "SUSPICIOUS"
+            if rand < 0.25: risk_level = "ABNORMAL"  # 15% -> 25%
+            elif rand < 0.50: risk_level = "SUSPICIOUS" # 15% -> 25%
             else: risk_level = "NORMAL"
             
-            secondary_category = "폭행 의심" if risk_level == "ABNORMAL" else "배회" if risk_level == "SUSPICIOUS" else ""
-            confidence = random.uniform(0.75, 0.95)
-            description = f"모의 VLM 분석: {risk_level} 감지"
+            event_type = "ASSAULT" if risk_level == "ABNORMAL" else "UNKNOWN"
             
             if risk_level in ["ABNORMAL", "SUSPICIOUS"]:
-                self.logger.info(f"[트리거 활성화!] VLM이 {risk_level} 감지 - 카메라: {request.camera_id}, 신뢰도: {confidence:.2f}")
+                self.logger.info(f"[트리거 활성화!] VLM이 {risk_level} 감지 - 카메라: {request.camera_id}")
             
             return VLMAnalysisResponse(
-                primary_category=risk_level,
-                secondary_category=secondary_category,
-                confidence=confidence,
-                description=description,
+                risk_level=risk_level,
+                event_type=event_type,
             )
 
         @self.app.get("/health")
@@ -127,7 +120,10 @@ class MockPrecisionServer:
     def _setup_routes(self):
         @self.app.post("/precision_analyze", response_model=PrecisionAnalysisResponse)
         async def precision_analyze(request: PrecisionAnalysisRequest):
-            vlm_risk_level = request.vlm_result.get("primary_category", "UNKNOWN")
+            # vlm_result에서 risk_level과 event_type을 직접 사용
+            vlm_risk_level = request.vlm_result.get("risk_level", "UNKNOWN")
+            vlm_event_type = request.vlm_result.get("event_type", "UNKNOWN")
+
             if vlm_risk_level.upper() in ["ABNORMAL", "SUSPICIOUS"]:
                 event_type = random.choice(["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"])
                 summary = f"모의 정밀 분석 결과: {event_type} 이벤트가 감지되었습니다."
@@ -139,7 +135,7 @@ class MockPrecisionServer:
                 risk_score = random.uniform(0.0, 0.2)
                 risk = "NORMAL"
             
-            self.logger.info(f"\n{'='*80}\n[정밀 분석 결과] 카메라: {request.camera_id}, VLM 트리거: {vlm_risk_level.upper()}, 분석 결과: {event_type} (점수: {risk_score:.2f})\n{'='*80}\n")
+            self.logger.info(f"\n{'='*80}\n[정밀 분석 결과] 카메라: {request.camera_id}, VLM 트리거: {vlm_risk_level.upper()} ({vlm_event_type}), 분석 결과: {event_type} (점수: {risk_score:.2f})\n{'='*80}\n")
             
             return PrecisionAnalysisResponse(
                 risk=risk,

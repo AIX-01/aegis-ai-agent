@@ -20,11 +20,12 @@ def analysis_router(state: AnalysisState) -> Literal["end", "verification", "pre
 def verification_router(state: AnalysisState) -> Literal["end", "precision_analysis"]:
     """
     검증 결과에 따른 분기 처리
+    검증 단계에서 'ABNORMAL'로 확정된 경우에만 정밀 분석으로 진행합니다.
     """
     risk_level = state.get("risk_level")
     
-    if risk_level == "NORMAL":
-        return "end"
+    if risk_level == "ABNORMAL":
+        return "precision_analysis"
     
-    # SUSPICIOUS 상태가 유지되거나 ABNORMAL로 변경된 경우 정밀 분석 진행
-    return "precision_analysis"
+    # NORMAL로 하향되었거나, 여전히 SUSPICIOUS인 경우 정밀 분석을 수행하지 않고 종료
+    return "end"

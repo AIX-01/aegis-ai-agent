@@ -28,9 +28,9 @@ def precision_analysis_node(state: AnalysisState, precision_client: PrecisionCli
     try:
         # 정밀 분석 요청에 VLM 결과와 메타데이터 전달
         task_metadata = {
-            "timestamp": occurred_at,
-            "window_start": occurred_at, # occurred_at이 window_start와 동일
-            "window_end": state.get("window_end", occurred_at) # window_end가 있다면 사용
+            "occurred_at": occurred_at, # 키 이름 수정: timestamp -> occurred_at
+            "window_start": state.get("window_start", occurred_at), # state에서 가져오기
+            "window_end": state.get("window_end", occurred_at)      # state에서 가져오기
         }
 
         result = precision_client.send_for_analysis(camera_id, frames, vlm_result, task_metadata)

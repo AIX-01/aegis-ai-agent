@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Optional, Literal, Dict, Any
+from typing import TypedDict, List, Optional, Literal, Dict, Any, Union
 from datetime import datetime
 
 # 1차 분류: VLM 분석 결과
@@ -16,10 +16,12 @@ class AnalysisState(TypedDict):
     camera_location: str
     occurred_at: datetime  # 분석 윈도우의 시작 시점
     frames: List[bytes]
-    
-    # --- 워크플로우 진행 중 생성 ---
     event_id: str
     vlm_result: Dict[str, Any]         # 1차 VLM 분석 원본 결과
+    window_start: Union[int, str] # 윈도우 시작 시간 추가
+    window_end: Union[int, str]   # 윈도우 종료 시간 추가
+    
+    # --- 워크플로우 진행 중 생성 ---
     precision_result: Dict[str, Any]   # 2차 정밀 분석 원본 결과
     
     # --- 최종 분석 결과 (워크플로우를 거치며 갱신됨) ---

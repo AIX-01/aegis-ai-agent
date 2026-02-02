@@ -4,11 +4,20 @@
 import logging
 import time
 import base64
+import json
 from typing import List, Dict, Any, Optional
 import requests
 from requests.exceptions import RequestException, Timeout
+from datetime import datetime
 
 from ..utils import exponential_backoff
+
+
+def json_serializer(obj: Any) -> str:
+    """datetime 객체를 포함한 JSON 직렬화를 위한 헬퍼 함수"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class PrecisionClient:
@@ -68,16 +77,22 @@ class PrecisionClient:
         # 재시도 루프
         for attempt in range(self.max_retries):
             try:
-                # 요청 전송
+                # 커스텀 직렬화 함수를 사용하여 JSON 문자열 생성
+                json_payload = json.dumps(payload, default=json_serializer)
+
+                # 요청 전송 (json= 대신 data= 사용)
                 response = requests.post(
                     self.endpoint,
-                    json=payload,
+                    data=json_payload,
                     timeout=self.timeout,
                     headers={"Content-Type": "application/json"},
                 )
 
                 # 상태 확인
-                response.raise_for_status()
+                if not response.ok:
+                    # 4xx, 5xx 에러 발생 시 상세 응답 내용 로깅
+                    self.logger.error(f"HTTP Error {response.status_code}: {response.text}")
+                    response.raise_for_status()
 
                 # 응답 파싱
                 result = response.json()
@@ -152,22 +167,26 @@ class PrecisionClient:
         # 프레임 base64 인코딩
         encoded_frames = [base64.b64encode(frame).decode("utf-8") for frame in frames]
 
+        # 윈도우 시작/종료 시간 안전하게 처리 (None 또는 빈 문자열일 경우 기본값 사용)
+        window_start = task_metadata.get("window_start")
+        if not window_start:
+            window_start = 0
+        
+        window_end = task_metadata.get("window_end")
+        if not window_end:
+            window_end = 0
+
         payload = {
             "camera_id": camera_id,
             "frames": encoded_frames,
             "num_frames": len(frames),
-            "timestamp": task_metadata.get("timestamp", "").isoformat()
-            if hasattr(task_metadata.get("timestamp", ""), "isoformat")
-            else str(task_metadata.get("timestamp", "")),
-            "window_start": task_metadata.get("window_start", 0),
-            "window_end": task_metadata.get("window_end", 0),
-            # VLM 메타데이터 포함
+            "occurred_at": task_metadata.get("occurred_at"),  # datetime 객체를 그대로 전달
+            "window_start": window_start,
+            "window_end": window_end,
             "vlm_result": {
-                "primary_category": vlm_metadata.get("primary_category", "unknown"),
-                "secondary_category": vlm_metadata.get("secondary_category", ""),
-                "confidence": vlm_metadata.get("confidence", 0.0),
-                "description": vlm_metadata.get("description", ""),
-            },
+                "risk_level": vlm_metadata.get("risk_level", "UNKNOWN"),
+                "event_type": vlm_metadata.get("event_type", "UNKNOWN"),
+            }
         }
 
         return payload

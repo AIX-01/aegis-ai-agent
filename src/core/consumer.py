@@ -9,6 +9,8 @@ from typing import Optional
 
 # LangGraph 빌더 import
 from ..graph.analysis_graph import build_graph
+from ..clients.vlm_client import VLMClient
+from ..clients.backend_client import BackendClient
 
 
 class ConsumerPool:
@@ -19,16 +21,11 @@ class ConsumerPool:
     비디오 분석 작업(Task)을 비동기적으로 처리합니다.
 
     주요 기능 및 특징:
-    1. 스레드 풀 관리: 설정된 수(config.num_workers)만큼의 워커 스레드를 생성하여
-       병렬로 작업을 처리합니다. 이를 통해 다수의 카메라 피드를 동시에 분석할 수 있습니다.
-    2. LangGraph 통합: 각 분석 작업은 LangGraph로 정의된 워크플로우(build_graph)를
-       통해 실행됩니다. 이는 분석 단계(VLM 분석, 검증, 리포트 생성 등)를 유연하게 관리하게 해줍니다.
-    3. 작업 소비 및 처리:
-       - 큐에서 대기 중인 작업을 가져옵니다 (FIFO).
-       - 작업 데이터(프레임, 카메라 정보)를 LangGraph의 초기 상태로 변환합니다.
-       - 그래프를 실행하고 결과를 받아 통계를 업데이트합니다.
-    4. 오류 처리 및 통계: 작업 처리 중 발생하는 예외를 포착하여 로깅하고,
-       전체 처리량, 성공/실패 횟수 등의 통계 지표를 유지합니다.
+    1. VLM 선행 처리: 모든 작업을 LangGraph로 보내지 않고, VLM 분석을 먼저 수행하여
+       '이상/의심' 징후가 있을 때만 LangGraph 파이프라인을 실행합니다. 이를 통해 효율성을 극대화합니다.
+    2. 스레드 풀 관리: 설정된 수(config.num_workers)만큼의 워커 스레드를 생성하여
+       병렬로 작업을 처리합니다.
+    3. LangGraph 통합: 정밀 분석 및 사후 처리는 LangGraph로 정의된 워크플로우를 통해 실행됩니다.
     """
 
     def __init__(
@@ -46,6 +43,12 @@ class ConsumerPool:
         self.config = config
         self.queue_manager = queue_manager
         self.logger = logging.getLogger("aegis-agent.consumer")
+
+        # VLM 클라이언트 초기화 (선행 분석용)
+        self.vlm_client = VLMClient(config)
+        
+        # 백엔드 클라이언트 초기화 (1차 결과 즉시 전송용)
+        self.backend_client = BackendClient(config)
 
         # LangGraph 워크플로우 빌드
         self.logger.info("LangGraph 워크플로우를 빌드합니다...")
@@ -74,15 +77,16 @@ class ConsumerPool:
 
     def _worker_loop(self, worker_id: int):
         """
-        개별 워커 스레드의 메인 루프 (LangGraph 실행)
+        개별 워커 스레드의 메인 루프 (VLM 선행 분석 후 LangGraph 실행)
 
-        각 워커는 독립적인 스레드에서 실행되며 다음과 같은 생명주기를 가집니다:
-        1. 대기: 큐에서 새로운 작업이 들어올 때까지 대기합니다.
-        2. 인출: 큐에서 작업(Task)을 하나 가져옵니다.
-        3. 준비: 작업 데이터를 LangGraph가 이해할 수 있는 상태 객체(State)로 변환합니다.
-        4. 실행: 정의된 분석 그래프(self.graph)를 실행(invoke)합니다.
-        5. 결과 처리: 그래프 실행 결과를 분석하여 위험도(Normal/Suspicious/Abnormal)를 판별하고
-           로그를 남기거나 통계를 갱신합니다.
+        각 워커는 다음과 같은 생명주기를 가집니다:
+        1. 인출: 큐에서 작업(Task)을 하나 가져옵니다.
+        2. VLM 분석: 가벼운 VLM 분석을 먼저 수행하여 위험도를 판별합니다.
+        3. 조건부 실행:
+           - NORMAL: 분석 종료 및 통계 갱신.
+           - ABNORMAL/SUSPICIOUS: 
+             1) 백엔드에 즉시 결과 전송 (Event ID 생성)
+             2) LangGraph를 호출하여 정밀 분석 및 사후 처리 수행.
 
         Args:
             worker_id (int): 워커 식별자 (디버깅 및 로깅용)
@@ -98,44 +102,98 @@ class ConsumerPool:
 
                 camera_info = task.get("camera_info", {})
                 camera_id = camera_info.get("id", "unknown")
+                frames = task.get("low_res_frames", [])
+                frame_timestamps = task.get("frame_timestamps", [])
                 
-                worker_logger.debug(f"{camera_id}의 작업을 처리합니다 (LangGraph)")
+                # 이벤트 발생 시각을 윈도우의 첫 프레임 시간으로 설정
+                occurred_at = frame_timestamps[0] if frame_timestamps else task.get("timestamp")
 
-                # 초기 상태 구성
-                initial_state = {
-                    "camera_id": camera_id,
-                    "camera_name": camera_info.get("name", "unknown"),
-                    "camera_location": camera_info.get("location", "unknown"),
-                    "occurred_at": task.get("timestamp"),
-                    "frames": task.get("low_res_frames", []),
-                    "errors": []
-                }
+                worker_logger.debug(f"{camera_id}의 VLM 1차 분석을 수행합니다.")
 
-                # LangGraph 실행
+                # 1. VLM 1차 분석 수행 (그래프 진입 전)
+                risk_level = "NORMAL"
+                vlm_result = {}
+                
                 try:
-                    final_state = self.graph.invoke(initial_state)
+                    task_metadata = {"timestamp": occurred_at}
+                    vlm_result = self.vlm_client.analyze_frames(camera_id, frames, task_metadata)
                     
-                    self.total_processed += 1
-                    
-                    # 결과 확인 및 통계 업데이트
-                    risk_level = final_state.get("risk_level", "UNKNOWN")
-                    
-                    if risk_level == "ABNORMAL":
-                        self.total_abnormal += 1
-                        worker_logger.info(f"[완료] {camera_id} 분석 완료: ABNORMAL (Event: {final_state.get('event_type')})")
-                    elif risk_level == "SUSPICIOUS":
-                        # 최종 상태가 SUSPICIOUS인 경우는 검증 후 NORMAL이 되지 않고 끝난 경우 등
-                        worker_logger.info(f"[완료] {camera_id} 분석 완료: SUSPICIOUS")
+                    if vlm_result and "risk_level" in vlm_result:
+                        risk_level = vlm_result["risk_level"].upper()
                     else:
-                        self.total_normal += 1
-                        worker_logger.debug(f"[완료] {camera_id} 분석 완료: NORMAL")
-                        
-                    if final_state.get("errors"):
-                        worker_logger.warning(f"{camera_id} 처리 중 오류 발생: {final_state['errors']}")
-
+                        worker_logger.warning(f"[{camera_id}] VLM 분석 결과가 유효하지 않습니다. NORMAL로 처리합니다.")
                 except Exception as e:
+                    worker_logger.error(f"[{camera_id}] VLM 분석 중 오류: {e}")
+                    # 분석 실패 시 안전을 위해 NORMAL 처리 (또는 에러 통계 증가)
                     self.total_failed += 1
-                    worker_logger.error(f"{camera_id} 그래프 실행 중 오류: {e}", exc_info=True)
+                    continue
+
+                # 2. 결과에 따른 분기 처리
+                if risk_level == "NORMAL":
+                    worker_logger.debug(f"[완료] {camera_id} 분석 완료: NORMAL (LangGraph 건너뜀)")
+                    self.total_processed += 1
+                    self.total_normal += 1
+                else:
+                    worker_logger.info(f"[{camera_id}] 이상 징후 감지 ({risk_level}): 백엔드 보고 후 LangGraph 실행")
+                    
+                    # 2-1. 백엔드에 1차 결과 즉시 보고
+                    event_id = None
+                    try:
+                        event_type = vlm_result.get("event_type", "")
+                        event_id = self.backend_client.send_vlm_result(
+                            camera_id=camera_id,
+                            risk=risk_level,
+                            type=event_type,
+                            occurred_at=occurred_at
+                        )
+                    except Exception as e:
+                        worker_logger.error(f"[{camera_id}] 백엔드 전송 중 오류: {e}")
+
+                    if not event_id:
+                        worker_logger.error(f"[{camera_id}] Event ID 생성 실패로 LangGraph 실행을 중단합니다.")
+                        self.total_failed += 1
+                        continue
+
+                    # 2-2. 초기 상태 구성 (Event ID 포함)
+                    initial_state = {
+                        "camera_id": camera_id,
+                        "camera_name": camera_info.get("name", "unknown"),
+                        "camera_location": camera_info.get("location", "unknown"),
+                        "occurred_at": occurred_at,
+                        "frames": frames,
+                        "vlm_result": vlm_result,
+                        "risk_level": risk_level,
+                        "event_type": vlm_result.get("event_type", ""),
+                        "event_id": event_id, # 백엔드에서 받은 ID 주입
+                        "window_start": task.get("window_start", ""),
+                        "window_end": task.get("window_end", ""),
+                        "errors": []
+                    }
+
+                    # 2-3. LangGraph 실행
+                    try:
+                        final_state = self.graph.invoke(initial_state)
+                        
+                        self.total_processed += 1
+                        
+                        # 최종 결과 확인 및 통계 업데이트
+                        final_risk = final_state.get("risk_level", risk_level)
+                        
+                        if final_risk == "ABNORMAL":
+                            self.total_abnormal += 1
+                            worker_logger.info(f"[완료] {camera_id} 정밀 분석 완료: ABNORMAL (Event: {final_state.get('event_type')})")
+                        elif final_risk == "SUSPICIOUS":
+                            worker_logger.info(f"[완료] {camera_id} 정밀 분석 완료: SUSPICIOUS")
+                        else:
+                            self.total_normal += 1
+                            worker_logger.debug(f"[완료] {camera_id} 정밀 분석 완료: NORMAL")
+                            
+                        if final_state.get("errors"):
+                            worker_logger.warning(f"{camera_id} 처리 중 오류 발생: {final_state['errors']}")
+
+                    except Exception as e:
+                        self.total_failed += 1
+                        worker_logger.error(f"{camera_id} 그래프 실행 중 오류: {e}", exc_info=True)
 
                 if (self.total_processed + self.total_failed) % 10 == 0:
                     self._log_stats()
