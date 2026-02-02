@@ -102,7 +102,7 @@ class BackendClient:
 
         Args:
             event_id: 갱신할 이벤트 ID
-            detail_result: 상세 분석 결과 (risk, event_type, summary, risk_score 등)
+            detail_result: 상세 분석 결과 (risk, type, summary, risk_score 등)
 
         Returns:
             성공 여부
@@ -114,7 +114,7 @@ class BackendClient:
         
         payload = {
             "risk": detail_result.get("risk"),
-            "type": detail_result.get("event_type"),
+            "type": detail_result.get("type"),
             "summary": detail_result.get("summary"),
             "risk_score": f"{risk_score:.2f}" if isinstance(risk_score, float) else str(risk_score) if risk_score is not None else None,
         }

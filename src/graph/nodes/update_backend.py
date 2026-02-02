@@ -28,7 +28,8 @@ def update_backend_node(state: AnalysisState, backend_client: BackendClient) -> 
 
     try:
         detail_result = {
-            "event_type": state.get("event_type"),
+            "risk": state.get("risk_level"),
+            "type": state.get("event_type"),
             "summary": state.get("summary"),
             "risk_score": state.get("risk_score")
         }

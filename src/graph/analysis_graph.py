@@ -2,8 +2,6 @@ import functools
 from langgraph.graph import StateGraph, END
 from .state import AnalysisState
 from .nodes import (
-    vlm_analysis_node,
-    backend_report_node,
     verification_node,
     precision_analysis_node,
     action_node,

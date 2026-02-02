@@ -365,7 +365,7 @@ graph TD
         %% Data Definitions
         D_Input[("12. LangGraph Input (invoke)<br>• camera_info, frames<br>• vlm_result, event_id<br>• occurred_at")]:::data
         D_Detail[("상세 분석 결과<br>• summary<br>• risk_score")]:::data
-        D_Req2[("Request")]:::data
+        D_Req2[("Request<br>• risk<br>• type<br>• summary<br>• risk_score")]:::data
         D_Actions[("대응 결과")]:::data
 
         %% Connections
