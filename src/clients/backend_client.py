@@ -51,10 +51,10 @@ class BackendClient:
             전송 성공 시 event_id, 실패 시 None
         """
         payload = {
-            "camera_id": camera_id,
+            "cameraId": camera_id,
             "risk": risk,
             "type": type,
-            "occurred_at": occurred_at.isoformat() if hasattr(occurred_at, "isoformat") else str(occurred_at),
+            "occurredAt": occurred_at.isoformat() if hasattr(occurred_at, "isoformat") else str(occurred_at),
         }
 
         for attempt in range(self.max_retries):
@@ -68,10 +68,12 @@ class BackendClient:
                 response.raise_for_status()
 
                 response_data = response.json()
-                event_id = response_data.get("event_id")
+                
+                # 백엔드 응답에서 event_id 추출 (여러 키 시도)
+                event_id = response_data.get("event_id") or response_data.get("eventId") or response_data.get("id")
 
                 if not event_id:
-                    self.logger.error(f"🚫 [백엔드 응답 오류] {camera_id}의 응답에 event_id가 없습니다.")
+                    self.logger.error(f"🚫 [백엔드 응답 오류] {camera_id}의 응답에 event_id가 없습니다. 응답: {response_data}")
                     return None
 
                 self.logger.info(f"[백엔드 전송 성공] {camera_id}의 VLM 결과를 전송하고 event_id {event_id}를 받았습니다.")
@@ -116,7 +118,7 @@ class BackendClient:
             "risk": detail_result.get("risk"),
             "type": detail_result.get("type"),
             "summary": detail_result.get("summary"),
-            "risk_score": f"{risk_score:.2f}" if isinstance(risk_score, float) else str(risk_score) if risk_score is not None else None,
+            "riskScore": f"{risk_score:.2f}" if isinstance(risk_score, float) else str(risk_score) if risk_score is not None else None,
         }
         final_payload = {k: v for k, v in payload.items() if v is not None}
 
@@ -126,7 +128,7 @@ class BackendClient:
 
         for attempt in range(self.max_retries):
             try:
-                response = requests.put(
+                response = requests.patch( # PUT -> PATCH 로 변경
                     update_endpoint,
                     json=final_payload,
                     timeout=self.timeout,

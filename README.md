@@ -239,6 +239,31 @@ _real_backend_update_endpoint: str = "http://<백엔드>:8080/api/vlm-results/{e
     *   응답: `{"status": "healthy"}`
 *   **상태 조회**: `GET /status`
     *   현재 실행 중인 프로듀서 수, 큐 크기, 처리 통계 등을 JSON으로 반환합니다.
+    *   **VLM 분석 시간 확인**: 응답 JSON의 `consumer_stats` 객체 내 `avg_vlm_time` 필드에서 평균 VLM 분석 소요 시간(초)을 확인할 수 있습니다.
+
+    **요청 예시:**
+    ```bash
+    curl http://localhost:8000/status
+    ```
+
+    **응답 예시:**
+    ```json
+    {
+      "producers": 2,
+      "queue_size": 0,
+      "consumer_stats": {
+        "num_workers": 4,
+        "total_processed": 15,
+        "total_failed": 0,
+        "total_abnormal": 2,
+        "total_normal": 13,
+        "success_rate": 100.0,
+        "abnormal_rate": 13.33,
+        "avg_vlm_time": 1.245  // 평균 VLM 분석 시간 (초)
+      },
+      "window_stats": { ... }
+    }
+    ```
 
 ---
 

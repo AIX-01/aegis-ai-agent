@@ -11,7 +11,7 @@ import uvicorn
 
 # README.md 와 state.py 에 정의된 타입
 RiskLevel = Literal["NORMAL", "SUSPICIOUS", "ABNORMAL"]
-EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM", "UNKNOWN"]
+EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]
 
 
 # =========================
@@ -83,14 +83,19 @@ class MockVLMServer:
         @self.app.post("/analyze", response_model=VLMAnalysisResponse)
         async def analyze(request: VLMAnalysisRequest):
             rand = random.random()
-            if rand < 0.25: risk_level = "ABNORMAL"  # 15% -> 25%
-            elif rand < 0.50: risk_level = "SUSPICIOUS" # 15% -> 25%
+            if rand < 0.25: risk_level = "ABNORMAL"
+            elif rand < 0.50: risk_level = "SUSPICIOUS"
             else: risk_level = "NORMAL"
             
-            event_type = "ASSAULT" if risk_level == "ABNORMAL" else "UNKNOWN"
-            
+            # NORMAL이 아닐 경우, 5가지 타입 중 하나를 무작위로 선택
+            if risk_level != "NORMAL":
+                event_type = random.choice(["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"])
+            else:
+                # NORMAL일 때는 특정 타입이 의미 없으므로, 첫 번째 타입으로 설정
+                event_type = "ASSAULT"
+
             if risk_level in ["ABNORMAL", "SUSPICIOUS"]:
-                self.logger.info(f"[트리거 활성화!] VLM이 {risk_level} 감지 - 카메라: {request.camera_id}")
+                self.logger.info(f"[트리거 활성화!] VLM이 {risk_level} 감지 - 카메라: {request.camera_id}, 타입: {event_type}")
             
             return VLMAnalysisResponse(
                 risk_level=risk_level,
@@ -120,9 +125,8 @@ class MockPrecisionServer:
     def _setup_routes(self):
         @self.app.post("/precision_analyze", response_model=PrecisionAnalysisResponse)
         async def precision_analyze(request: PrecisionAnalysisRequest):
-            # vlm_result에서 risk_level과 event_type을 직접 사용
-            vlm_risk_level = request.vlm_result.get("risk_level", "UNKNOWN")
-            vlm_event_type = request.vlm_result.get("event_type", "UNKNOWN")
+            vlm_risk_level = request.vlm_result.get("risk_level", "NORMAL")
+            vlm_event_type = request.vlm_result.get("event_type", "ASSAULT")
 
             if vlm_risk_level.upper() in ["ABNORMAL", "SUSPICIOUS"]:
                 event_type = random.choice(["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"])
@@ -130,7 +134,8 @@ class MockPrecisionServer:
                 risk_score = random.uniform(0.8, 1.0)
                 risk = "ABNORMAL"
             else:
-                event_type = "UNKNOWN"
+                # 이 경우는 거의 호출되지 않지만, 안전을 위해 기본값 설정
+                event_type = vlm_event_type
                 summary = "정상 상황으로 판단되어 정밀 분석을 수행하지 않았습니다."
                 risk_score = random.uniform(0.0, 0.2)
                 risk = "NORMAL"

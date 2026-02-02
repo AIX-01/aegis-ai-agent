@@ -63,6 +63,11 @@ class ConsumerPool:
         self.total_failed = 0
         self.total_abnormal = 0
         self.total_normal = 0
+        
+        # VLM 분석 시간 통계
+        self.total_vlm_time = 0.0
+        self.vlm_count = 0
+        self.stats_lock = threading.Lock()
 
     def start(self):
         """컨슈머 스레드 풀 시작"""
@@ -116,7 +121,18 @@ class ConsumerPool:
                 
                 try:
                     task_metadata = {"timestamp": occurred_at}
+                    
+                    # VLM 분석 시간 측정 시작
+                    vlm_start_time = time.time()
                     vlm_result = self.vlm_client.analyze_frames(camera_id, frames, task_metadata)
+                    # VLM 분석 시간 측정 종료 및 로깅
+                    vlm_duration = time.time() - vlm_start_time
+                    worker_logger.info(f"[{camera_id}] VLM 분석 소요 시간: {vlm_duration:.3f}초")
+                    
+                    # 통계 업데이트 (스레드 안전하게)
+                    with self.stats_lock:
+                        self.total_vlm_time += vlm_duration
+                        self.vlm_count += 1
                     
                     if vlm_result and "risk_level" in vlm_result:
                         risk_level = vlm_result["risk_level"].upper()
@@ -214,10 +230,16 @@ class ConsumerPool:
         self._log_stats()
 
     def _log_stats(self):
+        avg_vlm_time = 0.0
+        with self.stats_lock:
+            if self.vlm_count > 0:
+                avg_vlm_time = self.total_vlm_time / self.vlm_count
+
         self.logger.info(
             f"컨슈머 통계 - 처리: {self.total_processed}, "
             f"실패: {self.total_failed}, 이상: {self.total_abnormal}, "
-            f"정상: {self.total_normal}, 대기열: {self.queue_manager.size()}"
+            f"정상: {self.total_normal}, 대기열: {self.queue_manager.size()}, "
+            f"평균 VLM 시간: {avg_vlm_time:.3f}초"
         )
 
     def get_stats(self):
@@ -228,6 +250,10 @@ class ConsumerPool:
             if self.total_processed > 0
             else 0
         )
+        
+        with self.stats_lock:
+            avg_vlm_time = (self.total_vlm_time / self.vlm_count) if self.vlm_count > 0 else 0.0
+
         return {
             "num_workers": self.num_workers,
             "total_processed": self.total_processed,
@@ -236,4 +262,5 @@ class ConsumerPool:
             "total_normal": self.total_normal,
             "success_rate": (100 * self.total_processed / total) if total > 0 else 0,
             "abnormal_rate": abnormal_rate,
+            "avg_vlm_time": avg_vlm_time,
         }

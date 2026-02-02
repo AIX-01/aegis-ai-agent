@@ -5,7 +5,7 @@ from datetime import datetime
 RiskLevel = Literal["NORMAL", "SUSPICIOUS", "ABNORMAL"]
 
 # 2차 분류: 정밀 분석 이벤트 유형
-EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM", "UNKNOWN"]
+EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]
 
 class AnalysisState(TypedDict):
     """LangGraph 분석 파이프라인의 상태를 정의하는 TypedDict"""
