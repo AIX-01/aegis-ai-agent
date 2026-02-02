@@ -4,6 +4,19 @@
 
 **스프링부트 백엔드**가 Redis에 등록한 카메라 목록을 동적으로 관리하며, 실시간 영상 프레임을 **LangGraph 기반 파이프라인**으로 처리하여 VLM 분석, 백엔드 보고, 조건부 정밀 분석(LLM) 및 다단계 추론을 수행하는 시스템입니다.
 
+## 🛠️ 기술 스택
+
+| 분류 | 기술 |
+|------|------|
+| Language | Python 3.13 |
+| Framework | LangGraph 1.0, LangChain Core 1.2 |
+| API | FastAPI, Uvicorn |
+| 영상처리 | OpenCV (opencv-python) |
+| 캐시 | Redis |
+| HTTP | httpx, requests |
+
+---
+
 ## 🎯 시스템 개요
 
 ### 핵심 개념
@@ -12,6 +25,58 @@
 - **조건부 다단계 추론**: VLM 1차 분석에서 '이상'이 감지되면, 정밀 분석(LLM), 최종 보고서 생성 등 LangGraph로 정의된 다단계 추론 그래프가 순차적으로 실행됩니다.
 - **Redis 동적 스트림 관리**: 에이전트 재시작 없이 **스프링부트 백엔드**가 Redis 설정을 변경하여 분석 대상 카메라를 실시간으로 제어합니다.
 - **FastAPI 기반 에이전트**: 에이전트 자체가 FastAPI 서버로 실행되어, 외부에서 상태를 모니터링하고 관리할 수 있습니다.
+
+---
+
+## 📂 프로젝트 구조
+
+```
+src/
+├── __init__.py
+├── app.py                  # 메인 오케스트레이터 (AegisAgent)
+├── config.py               # 설정 (Config 데이터클래스)
+├── utils.py                # 유틸리티 (로깅, 시그널 핸들러)
+├── api/
+│   ├── __init__.py
+│   ├── api_server.py       # FastAPI 서버 (에이전트 상태 조회)
+│   └── mock_server.py      # Mock 서버 (VLM, Precision, Backend)
+├── clients/
+│   ├── __init__.py
+│   ├── vlm_client.py       # VLM API 클라이언트
+│   ├── precision_client.py # Precision LLM 클라이언트
+│   ├── backend_client.py   # Backend API 클라이언트
+│   └── vector_store_client.py # Vector Store 클라이언트
+├── core/
+│   ├── __init__.py
+│   ├── producer.py         # 프레임 프로듀서 (RTSP → 프레임)
+│   ├── consumer.py         # 컨슈머 풀 (LangGraph 실행)
+│   ├── queue_manager.py    # 프레임 큐 관리
+│   ├── windowing.py        # 윈도우 매니저
+│   └── redis_manager.py    # Redis 연동 (카메라 목록 동기화)
+├── graph/
+│   ├── __init__.py
+│   ├── analysis_graph.py   # LangGraph 워크플로우 빌드
+│   ├── state.py            # 분석 상태 정의 (AnalysisState)
+│   ├── nodes/              # 그래프 노드들
+│   │   ├── __init__.py
+│   │   ├── vlm_analysis.py
+│   │   ├── backend_report.py
+│   │   ├── verification.py
+│   │   ├── precision_analysis.py
+│   │   ├── update_backend.py
+│   │   ├── action.py
+│   │   └── generate_report.py
+│   └── edges/              # 그래프 엣지 (라우터)
+│       ├── __init__.py
+│       └── routers.py
+├── retrieval/              # RAG 관련 (작업 중)
+│   ├── __init__.py
+│   ├── indexer.py          # 문서 인덱싱
+│   └── retriever_factory.py
+└── tools/                  # LangChain 도구 (작업 중)
+    ├── __init__.py
+    └── search_tools.py     # 매뉴얼/사례 검색
+```
 
 ---
 
@@ -28,82 +93,141 @@
 
 ---
 
-## 🚀 실행 방법
+## 🚀 설치 및 실행
+
+### 설치
+
+```bash
+# 가상환경 생성
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# 의존성 설치
+pip install -r requirements.txt
+```
+
+### 실행 방법
 
 에이전트는 **모의(Mock) 서버 모드**와 **실제(Real) 서버 모드** 두 가지로 실행할 수 있으며, 각 컴포넌트별로 개별 설정도 가능합니다.
 
 실행 시 에이전트 자체 API 서버가 **8000번 포트**에서 시작됩니다.
 
-### 1. 모의(Mock) 서버 모드 (기본값, 개발 및 테스트용)
+#### 1. 모의(Mock) 서버 모드 (기본값, 개발 및 테스트용)
 
 외부 AI/백엔드 서버 없이 에이전트의 전체 파이프라인 동작을 테스트하기 위한 모드입니다. 별도의 옵션 없이 실행하면 기본적으로 이 모드로 동작합니다.
-
-#### ✅ 실행 명령어
 
 ```sh
 # 프로젝트 루트 폴더에서 실행
 python -m src.app
 ```
 
-#### ✅ 동작 방식
-- 에이전트가 자체적으로 VLM, 정밀 분석, 백엔드 서버를 흉내 내는 **모의 서버를 함께 실행**합니다.
-- 에이전트는 `localhost`의 모의 서버와 통신하며, 모의 서버는 무작위로 분석 결과를 생성하여 반환합니다.
-- `config.py`의 `mock_vlm_port`, `mock_precision_port`, `mock_backend_port`에 설정된 포트를 사용합니다.
-
-### 2. 실제(Real) 서버 모드 (통합 및 운영용)
+#### 2. 실제(Real) 서버 모드 (통합 및 운영용)
 
 실제 VLM, LLM, 백엔드 서버와 연동하여 시스템 전체를 운영할 때 사용합니다.
-
-#### ✅ 실행 명령어
-
-`--no-mock` 플래그를 추가하여 실행합니다.
 
 ```sh
 # 프로젝트 루트 폴더에서 실행
 python -m src.app --no-mock
 ```
 
-#### ✅ 사전 설정
-1.  **`src/config.py` 파일을 열어 실제 서버 주소를 모두 수정해야 합니다.**
-
-    ```python
-    # config.py
-    @dataclass
-    class Config:
-        # ...
-        # 실제 운영 서버 주소로 변경
-        _real_vlm_endpoint: str = "http://123.45.67.89:8001/analyze"
-        _real_precision_endpoint: str = "http://123.45.67.89:8002/precision_analyze"
-        _real_backend_create_endpoint: str = "http://123.45.67.89:8080/api/vlm-results"
-        _real_backend_update_endpoint: str = "http://123.45.67.89:8080/api/vlm-results/{event_id}"
-        # ...
-    ```
-
-#### ✅ 동작 방식
-- `--no-mock` 플래그로 인해 모의 서버를 실행하지 않습니다.
-- 에이전트는 `config.py`에 설정된 **실제 서버 주소**로 HTTP 요청을 보냅니다.
-
-### 3. 하이브리드 모드 (개별 컴포넌트 제어)
+#### 3. 하이브리드 모드 (개별 컴포넌트 제어)
 
 특정 컴포넌트만 실제 서버를 사용하고, 나머지는 Mock 서버를 사용하고 싶을 때 유용합니다.
-
-#### ✅ 실행 옵션
 
 *   `--real-vlm`: VLM만 실제 서버 사용 (나머지는 Mock)
 *   `--real-precision`: 정밀 분석만 실제 서버 사용 (나머지는 Mock)
 *   `--real-backend`: 백엔드만 실제 서버 사용 (나머지는 Mock)
 
-#### ✅ 실행 예시
+**실행 예시:**
 
-**예시 1: VLM만 실제 서버 사용**
 ```sh
+# VLM만 실제 서버 사용
 python -m src.app --real-vlm
-```
 
-**예시 2: VLM과 백엔드는 실제 서버, 정밀 분석은 Mock 사용**
-```sh
+# VLM과 백엔드는 실제 서버, 정밀 분석은 Mock 사용
 python -m src.app --real-vlm --real-backend
 ```
+
+### Docker 실행
+
+```dockerfile
+FROM python:3.13-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY src/ ./src/
+CMD ["python", "-m", "src.app"]
+```
+
+---
+
+## ⚙️ 설정 (config.py)
+
+### 모드 설정
+
+```python
+mock_mode: bool = True  # True: Mock 서버, False: 실제 서버
+```
+
+### 실제 서버 주소
+
+```python
+_real_vlm_endpoint: str = "http://<VLM 서버>:8001/analyze"
+_real_precision_endpoint: str = "http://<LLM 서버>:8002/precision_analyze"
+_real_backend_create_endpoint: str = "http://<백엔드>:8080/api/vlm-results"
+_real_backend_update_endpoint: str = "http://<백엔드>:8080/api/vlm-results/{event_id}"
+```
+
+### Mock 서버 포트
+
+| 서버 | 포트 |
+|------|------|
+| VLM | 8001 |
+| Precision LLM | 8002 |
+| Backend | 8088 |
+
+### RTSP 설정
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| `rtsp_host` | `127.0.0.1` | MediaMTX 호스트 |
+| `rtsp_port` | `8554` | RTSP 포트 |
+| `frame_width` | `640` | 프레임 너비 |
+| `frame_height` | `360` | 프레임 높이 |
+| `jpeg_quality` | `60` | JPEG 품질 |
+| `fps` | `1` | 초당 프레임 수 |
+
+### 분석 파이프라인 설정
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| `num_workers` | `4` | 컨슈머 워커 수 |
+| `window_size` | `8` | 윈도우 프레임 수 |
+| `window_slide` | `4` | 슬라이드 프레임 수 |
+| `flush_timeout` | `30` | 플러시 타임아웃 (초) |
+| `min_flush_size` | `5` | 최소 플러시 크기 |
+| `queue_max_size` | `20` | 큐 최대 크기 |
+
+### 네트워크 설정
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| `vlm_timeout` | `30` | VLM 타임아웃 (초) |
+| `vlm_max_retries` | `3` | VLM 재시도 횟수 |
+| `precision_timeout` | `60` | Precision 타임아웃 (초) |
+| `backend_timeout` | `10` | Backend 타임아웃 (초) |
+| `reconnect_delay` | `2.0` | 재연결 지연 (초) |
+| `max_reconnect_delay` | `60.0` | 최대 재연결 지연 (초) |
+
+### Redis 설정
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| `redis_host` | `localhost` | Redis 호스트 |
+| `redis_port` | `6379` | Redis 포트 |
+| `redis_db` | `0` | Redis DB 번호 |
+| `redis_analysis_cameras_key` | `analysis:cameras` | 카메라 목록 키 |
+| `redis_update_channel` | `camera:analysis:update` | 업데이트 채널 |
 
 ---
 
@@ -115,24 +239,6 @@ python -m src.app --real-vlm --real-backend
     *   응답: `{"status": "healthy"}`
 *   **상태 조회**: `GET /status`
     *   현재 실행 중인 프로듀서 수, 큐 크기, 처리 통계 등을 JSON으로 반환합니다.
-
----
-
-### 실행 전 공통 준비 사항
-
-어떤 모드로 실행하든 아래 사항은 준비되어야 합니다.
-
-1.  **의존성 설치**:
-    ```sh
-    pip install -r requirements.txt
-    ```
-2.  **Redis 서버**: `config.py`에 설정된 주소에서 실행 중이어야 합니다.
-3.  **Redis 데이터**: `redis-cli`를 사용하여 분석할 카메라 정보를 `analysis:cameras` 키에 등록해야 합니다.
-    ```sh
-    # 예시: 'cam1'이라는 이름의 RTSP 스트림을 분석 대상으로 등록
-    SADD analysis:cameras '{"id": "564f809f-ed8a-4a2a-8109-8efc033d9787", "name": "cam1", "location": "Office"}'
-    ```
-4.  **영상 소스**: Redis에 등록한 `camera_name`에 해당하는 RTSP 스트림 또는 로컬 비디오 파일이 필요합니다.
 
 ---
 
