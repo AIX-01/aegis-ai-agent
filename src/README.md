@@ -323,7 +323,7 @@ graph TD
         D_Frames[("Raw Frames<br>[JPEG Bytes...]")]:::data
         D_Window[("Window Data<br>• Frames (List)<br>• Camera Info<br>• Time")]:::data
         D_Risk[("• Risk Level<br>• Event Type")]:::data
-        D_Req1[("Request<br>• risk<br>• type")]:::data
+        D_Req1[("Request<br>• camera_id<br>• risk<br>• type<br>• occurred_at")]:::data
         D_Res1[("Response<br>• eventId")]:::data
 
         %% Connections
