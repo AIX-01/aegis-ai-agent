@@ -10,14 +10,14 @@ Core 패키지: 실시간 영상 처리 및 1차 분석
 """
 
 from .producer import FrameProducer
-from .consumer import AnalysisConsumer
+from .consumer import ConsumerPool
 from .windowing import WindowManager
 from .queue_manager import QueueManager
 from .redis_manager import RedisManager
 
 __all__ = [
     "FrameProducer",
-    "AnalysisConsumer",
+    "ConsumerPool",
     "WindowManager",
     "QueueManager",
     "RedisManager",
