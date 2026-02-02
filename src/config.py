@@ -20,7 +20,10 @@ class Config:
     
     # 백엔드 엔드포인트 분리 (생성용 / 갱신용)
     # 갱신용 URL에는 {event_id} 플레이스홀더를 사용할 수 있습니다.
+    
+    # 1차 분석 후 '이상' 또는 '의심'일 때, 새로운 이벤트를 생성(CREATE)하기 위해 사용
     _real_backend_create_endpoint: str = "http://<실제 백엔드 서버 IP>:8080/api/vlm-results"
+    # 2차 정밀 분석이 끝난 후 또는 '의심' 상태를 최종 기록할 때, 기존 이벤트의 내용을 갱신(UPDATE)하기 위해 사용
     _real_backend_update_endpoint: str = "http://<실제 백엔드 서버 IP>:8080/api/vlm-results/{event_id}"
 
     # ===================================================================
