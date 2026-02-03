@@ -348,6 +348,292 @@ git commit -m "feat: Qdrant 벡터 데이터베이스 통합
 
 ---
 
+## 10. 실제 운영 시 수정 사항
+
+### 10.1 테스트용 하드코딩 제거
+
+현재 테스트 스크립트에서는 샘플 데이터를 하드코딩으로 저장하고 있습니다. 실제 운영 시에는 다음과 같이 변경해야 합니다:
+
+#### 현재 (테스트용)
+```python
+# scripts/test_qdrant_search.py
+sample_events = [
+    {
+        "event_id": "EVT-2026-001",
+        "summary": "주차장에서 두 남성이 격렬하게 다툼",
+        "event_type": "ASSAULT"
+    },
+    # ... 하드코딩된 샘플 데이터
+]
+
+for event in sample_events:
+    client.add_event(event["event_id"], event)
+```
+
+#### 실제 운영 시
+```python
+# src/graph/nodes/generate_report.py
+def save_event_to_vector_store(state):
+    """VLM 분석 결과를 자동으로 Qdrant에 저장"""
+    from src.clients.vector_store_client import VectorStoreClient
+    
+    vector_client = VectorStoreClient()
+    
+    event_data = {
+        "summary": state["vlm_summary"],
+        "event_type": state["event_type"],
+        "location": state["camera_location"],
+        "timestamp": state["timestamp"],
+        "resolution": state.get("resolution", ""),
+        "confidence": state.get("confidence", 0.0)
+    }
+    
+    vector_client.add_event(
+        event_id=state["event_id"],
+        event_data=event_data
+    )
+```
+
+### 10.2 환경변수 설정
+
+#### 개발 환경 (.env.example)
+```env
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
+```
+
+#### 프로덕션 환경 (.env.production)
+```env
+QDRANT_HOST=aegis-qdrant
+QDRANT_PORT=6333
+EMBEDDING_MODEL=paraphrase-multilingual-MiniLM-L12-v2
+QDRANT_API_KEY=your-production-api-key  # Qdrant Cloud 사용 시
+```
+
+### 10.3 데이터 마이그레이션
+
+기존 PostgreSQL에 저장된 과거 이벤트 데이터를 Qdrant로 마이그레이션:
+
+```python
+# scripts/migrate_past_events.py
+"""
+PostgreSQL → Qdrant 데이터 마이그레이션 스크립트
+"""
+import psycopg2
+from src.clients.vector_store_client import VectorStoreClient
+
+def migrate_events():
+    # PostgreSQL 연결
+    conn = psycopg2.connect(
+        host="localhost",
+        database="aegis",
+        user="aegis",
+        password="trillion"
+    )
+    cursor = conn.cursor()
+    
+    # Qdrant 클라이언트
+    vector_client = VectorStoreClient()
+    
+    # 과거 이벤트 조회 (최근 6개월)
+    cursor.execute("""
+        SELECT id, summary, type, location, created_at, resolution
+        FROM events
+        WHERE created_at >= NOW() - INTERVAL '6 months'
+    """)
+    
+    migrated_count = 0
+    for row in cursor.fetchall():
+        event_id, summary, event_type, location, timestamp, resolution = row
+        
+        success = vector_client.add_event(str(event_id), {
+            "summary": summary or "",
+            "event_type": event_type or "UNKNOWN",
+            "location": location or "",
+            "timestamp": str(timestamp),
+            "resolution": resolution or ""
+        })
+        
+        if success:
+            migrated_count += 1
+    
+    print(f"✅ {migrated_count}건의 이벤트 마이그레이션 완료")
+    cursor.close()
+    conn.close()
+
+if __name__ == "__main__":
+    migrate_events()
+```
+
+### 10.4 매뉴얼 데이터 초기화
+
+현재 `manuals` 컬렉션이 비어있으므로, 대응 매뉴얼 초기 데이터를 추가:
+
+```powershell
+cd aegis-ai-agent
+python -m scripts.init_qdrant_data
+```
+
+### 10.5 자동 백업 설정
+
+Qdrant 데이터 정기 백업 스크립트 (cron으로 매일 실행):
+
+```python
+# scripts/backup_qdrant.py
+"""Qdrant 스냅샷 백업"""
+import os
+from datetime import datetime
+from qdrant_client import QdrantClient
+
+def backup_qdrant():
+    client = QdrantClient(host="localhost", port=6333)
+    backup_dir = f"/backups/qdrant_{datetime.now():%Y%m%d}"
+    
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    for collection_name in ["past_events", "manuals", "frames"]:
+        client.create_snapshot(collection_name)
+        print(f"✅ {collection_name} 스냅샷 생성 완료")
+
+if __name__ == "__main__":
+    backup_qdrant()
+```
+
+### 10.6 모니터링 및 알림
+
+Qdrant 상태 모니터링:
+
+```python
+# src/utils/monitoring.py
+def check_qdrant_health():
+    """Qdrant 헬스체크 및 알림"""
+    from src.clients.vector_store_client import VectorStoreClient
+    
+    client = VectorStoreClient()
+    
+    if not client.health_check():
+        # 슬랙/이메일 알림 전송
+        send_alert("❌ Qdrant 연결 실패!")
+        return False
+    
+    stats = client.get_stats()
+    
+    # 데이터 증가 모니터링
+    if stats["past_events"]["points_count"] > 100000:
+        send_alert("⚠️ Qdrant past_events 컬렉션 10만건 초과")
+    
+    return True
+```
+
+### 10.7 임베딩 모델 최적화
+
+한국어 특화 모델로 변경 검토:
+
+| 모델 | 차원 | 특징 |
+|------|------|------|
+| `paraphrase-multilingual-MiniLM-L12-v2` (현재) | 384 | 다국어, 경량 |
+| `xlm-r-100langs-bert-base-nli-stsb-mean-tokens` | 768 | 다국어, 고성능 |
+| `jhgan/ko-sroberta-multitask` | 768 | 한국어 특화 |
+
+```python
+# src/clients/vector_store_client.py 수정
+class VectorStoreClient:
+    def __init__(self, embedding_model="jhgan/ko-sroberta-multitask"):
+        self.encoder = SentenceTransformer(embedding_model)
+        # ... 기존 코드
+```
+
+### 10.8 인덱스 튜닝
+
+대용량 데이터 처리를 위한 HNSW 파라미터 조정:
+
+```python
+# src/clients/vector_store_client.py
+from qdrant_client.models import VectorParams, Distance, HnswConfigDiff
+
+self.client.create_collection(
+    collection_name="past_events",
+    vectors_config=VectorParams(
+        size=self.vector_size,
+        distance=Distance.COSINE,
+        hnsw_config=HnswConfigDiff(
+            m=16,              # 연결 수 (기본: 16, 높을수록 정확하지만 느림)
+            ef_construct=100,  # 인덱스 구축 시 탐색 깊이 (기본: 100)
+        )
+    )
+)
+```
+
+### 10.9 API 엔드포인트 추가
+
+프론트엔드에서 유사 사례를 조회할 수 있도록 API 추가:
+
+```python
+# src/api/api_server.py
+from fastapi import FastAPI, Query
+from src.clients.vector_store_client import VectorStoreClient
+
+app = FastAPI()
+vector_client = VectorStoreClient()
+
+@app.get("/api/similar-events")
+async def get_similar_events(
+    query: str = Query(..., description="검색 쿼리"),
+    limit: int = Query(5, ge=1, le=20),
+    event_type: str = Query(None, description="이벤트 타입 필터")
+):
+    """유사 사례 검색 API"""
+    results = vector_client.search_similar_events(
+        query=query,
+        limit=limit,
+        event_type=event_type,
+        min_score=0.3
+    )
+    return {"results": results}
+
+@app.get("/api/manuals/search")
+async def search_manuals(
+    query: str = Query(..., description="검색 쿼리"),
+    limit: int = Query(3, ge=1, le=10)
+):
+    """대응 매뉴얼 검색 API"""
+    results = vector_client.search_manuals(
+        query=query,
+        limit=limit,
+        min_score=0.5
+    )
+    return {"results": results}
+```
+
+### 10.10 보안 설정
+
+#### Qdrant API Key 설정 (프로덕션)
+```yaml
+# docker-compose.yml
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+```
+
+#### 클라이언트 API Key 사용
+```python
+# src/clients/vector_store_client.py
+import os
+
+class VectorStoreClient:
+    def __init__(self, api_key=None):
+        self.client = QdrantClient(
+            host=self.host,
+            port=self.port,
+            api_key=api_key or os.getenv("QDRANT_API_KEY")
+        )
+```
+
+---
+
 ## 부록: 참고 문서
 
 - [Qdrant 공식 문서](https://qdrant.tech/documentation/)
