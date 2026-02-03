@@ -11,27 +11,21 @@ from typing import Optional
 from ..graph.analysis_graph import build_graph
 from ..clients.vlm_client import VLMClient
 from ..clients.backend_client import BackendClient
+from ..clients.storage_client import StorageClient
+from ..core.muxer import mux_packets_to_mp4
 
 
 class ConsumerPool:
     """
     큐에서 분석 작업을 소비하는 스레드 풀 (LangGraph 기반)
-
-    이 클래스는 시스템의 Consumer 역할을 담당하며, Producer가 큐에 넣은
-    비디오 분석 작업(Task)을 비동기적으로 처리합니다.
-
-    주요 기능 및 특징:
-    1. VLM 선행 처리: 모든 작업을 LangGraph로 보내지 않고, VLM 분석을 먼저 수행하여
-       '이상/의심' 징후가 있을 때만 LangGraph 파이프라인을 실행합니다. 이를 통해 효율성을 극대화합니다.
-    2. 스레드 풀 관리: 설정된 수(config.num_workers)만큼의 워커 스레드를 생성하여
-       병렬로 작업을 처리합니다.
-    3. LangGraph 통합: 정밀 분석 및 사후 처리는 LangGraph로 정의된 워크플로우를 통해 실행됩니다.
     """
 
     def __init__(
         self,
         config,
         queue_manager,
+        packet_buffers=None, # 카메라별 PacketBuffer 딕셔너리 주입
+        source_streams=None  # 카메라별 원본 스트림 정보 주입
     ):
         """
         컨슈머 풀 초기화
@@ -39,16 +33,19 @@ class ConsumerPool:
         Args:
             config: 시스템 설정
             queue_manager: 중앙 큐 관리자
+            packet_buffers: {camera_id: PacketBuffer} 딕셔너리
+            source_streams: {camera_id: av.VideoStream} 딕셔너리
         """
         self.config = config
         self.queue_manager = queue_manager
+        self.packet_buffers = packet_buffers or {}
+        self.source_streams = source_streams or {}
         self.logger = logging.getLogger("aegis-agent.consumer")
 
-        # VLM 클라이언트 초기화 (선행 분석용)
+        # 클라이언트 초기화
         self.vlm_client = VLMClient(config)
-        
-        # 백엔드 클라이언트 초기화 (1차 결과 즉시 전송용)
         self.backend_client = BackendClient(config)
+        self.storage_client = StorageClient(config)
 
         # LangGraph 워크플로우 빌드
         self.logger.info("LangGraph 워크플로우를 빌드합니다...")
@@ -170,7 +167,36 @@ class ConsumerPool:
                         self.total_failed += 1
                         continue
 
-                    # 2-2. 초기 상태 구성 (Event ID 포함)
+                    # 2-2. [신규] 영상 클립 생성 및 업로드 (PyAV 패킷 기반)
+                    try:
+                        # 윈도우의 시작과 끝 시간을 기준으로 패킷 추출
+                        # start_ts는 윈도우 시작 프레임의 시간
+                        start_ts = frame_timestamps[0].timestamp() if frame_timestamps else time.time() - 10
+                        end_ts = frame_timestamps[-1].timestamp() if frame_timestamps else time.time()
+                        
+                        buffer = self.packet_buffers.get(camera_id)
+                        source_stream = self.source_streams.get(camera_id)
+                        
+                        if buffer and source_stream:
+                            # 1) 패킷 추출 (Keyframe Back-tracking 포함)
+                            packets = buffer.get_packets(start_ts, end_ts)
+                            
+                            # 2) Muxing (MP4 생성)
+                            mp4_file = mux_packets_to_mp4(packets, source_stream)
+                            
+                            # 3) MinIO 업로드
+                            clip_url = self.storage_client.upload_clip(mp4_file, event_id)
+                            
+                            # 4) 백엔드 알림
+                            if clip_url:
+                                self.backend_client.update_event_clip(event_id, clip_url)
+                        else:
+                            worker_logger.warning(f"[{camera_id}] 버퍼 또는 스트림 정보가 없어 클립을 생성하지 못했습니다.")
+                            
+                    except Exception as e:
+                        worker_logger.error(f"[{camera_id}] 클립 생성/업로드 중 오류: {e}", exc_info=True)
+
+                    # 2-3. 초기 상태 구성 (Event ID 포함)
                     initial_state = {
                         "camera_id": camera_id,
                         "camera_name": camera_info.get("name", "unknown"),

@@ -69,6 +69,17 @@ class Config:
     frame_height: int = 360
     jpeg_quality: int = 60
     fps: int = 1
+    video_buffer_seconds: int = 30  # 30초 분량 패킷 버퍼링
+
+    # =========================================
+    # MinIO / S3 설정
+    # =========================================
+    minio_endpoint: str = "http://localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket: str = "aegis-clips"
+    minio_secure: bool = False
+    clip_temp_path: str = "/clips/temp"
 
     # =========================================
     # 분석 파이프라인 설정

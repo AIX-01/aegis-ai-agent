@@ -38,10 +38,16 @@ class AegisAgent:
         self.queue_manager = QueueManager(max_size=config.queue_max_size)
         self.window_manager = WindowManager(config, self.queue_manager)
         
+        # [신규] 카메라별 리소스 공유를 위한 딕셔너리
+        self.packet_buffers = {}
+        self.source_streams = {}
+
         # LangGraph 기반 컨슈머 풀
         self.consumer_pool = ConsumerPool(
             config=config,
             queue_manager=self.queue_manager,
+            packet_buffers=self.packet_buffers,
+            source_streams=self.source_streams
         )
 
         # 동적 스트림 설정을 위한 Redis 매니저
@@ -132,7 +138,12 @@ class AegisAgent:
                         config=self.config,
                         frame_callback=self.window_manager.add_frame,
                         shutdown_event=self.shutdown_event,
+                        source_streams_dict=self.source_streams # 공유 딕셔너리 전달
                     )
+                    
+                    # PacketBuffer를 공유 딕셔너리에 등록
+                    self.packet_buffers[cam_id] = producer.packet_buffer
+                    
                     producer.start()
                     self.producers[cam_id] = producer
 
@@ -141,6 +152,9 @@ class AegisAgent:
                     producer = self.producers.pop(cam_id, None)
                     if producer:
                         producer.stop()
+                    # 리소스 정리
+                    self.packet_buffers.pop(cam_id, None)
+                    self.source_streams.pop(cam_id, None)
 
                 self.logger.info(f"프로듀서 업데이트 완료. 총 프로듀서 수: {len(self.producers)}")
 
