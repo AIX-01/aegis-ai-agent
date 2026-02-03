@@ -1,0 +1,81 @@
+# ============================================
+# AEGIS AI Agent - Docker Compose
+# 독립 실행 또는 aegis-infra와 통합 가능
+# ============================================
+
+services:
+  # =========================================
+  # AEGIS AI Agent
+  # =========================================
+  aegis-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aegis-agent
+    restart: unless-stopped
+    ports:
+      - "8000:8000"   # Agent API
+      - "8001:8001"   # Mock VLM (mock_mode)
+      - "8002:8002"   # Mock Precision (mock_mode)
+      - "8088:8088"   # Mock Backend (mock_mode)
+    environment:
+      # Redis 설정 (aegis-infra의 Redis 사용)
+      - REDIS_HOST=${REDIS_HOST:-aegis-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # RTSP 설정 (MediaMTX)
+      - RTSP_HOST=${RTSP_HOST:-aegis-mediamtx}
+      - RTSP_PORT=${RTSP_PORT:-8554}
+      # Qdrant 설정 (벡터 데이터베이스)
+      - QDRANT_HOST=${QDRANT_HOST:-aegis-qdrant}
+      - QDRANT_PORT=${QDRANT_PORT:-6333}
+      - QDRANT_ENABLED=${QDRANT_ENABLED:-true}
+      # 백엔드 설정
+      - BACKEND_HOST=${BACKEND_HOST:-aegis-backend}
+      - BACKEND_PORT=${BACKEND_PORT:-8080}
+      # 모드 설정
+      - MOCK_MODE=${MOCK_MODE:-true}
+      # 로깅
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    networks:
+      - aegis
+    depends_on:
+      - qdrant
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # =========================================
+  # Qdrant 벡터 데이터베이스 (AI Agent 전용)
+  # =========================================
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: aegis-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # HTTP API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - aegis
+
+# =========================================
+# Networks - aegis-infra 네트워크 사용
+# =========================================
+networks:
+  aegis:
+    external: true
+
+# =========================================
+# Volumes
+# =========================================
+volumes:
+  qdrant_data:
+    driver: local

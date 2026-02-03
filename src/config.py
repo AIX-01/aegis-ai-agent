@@ -1,8 +1,30 @@
 """
 AEGIS AI Agent 설정 모듈
+환경 변수를 통해 Docker 컨테이너에서 동적으로 설정 가능
 """
+import os
 from dataclasses import dataclass, field
 from typing import Optional
+
+
+def get_env(key: str, default: str = None) -> str:
+    """환경 변수에서 값을 가져옵니다."""
+    return os.environ.get(key, default)
+
+
+def get_env_bool(key: str, default: bool = False) -> bool:
+    """환경 변수에서 불리언 값을 가져옵니다."""
+    value = os.environ.get(key, str(default)).lower()
+    return value in ('true', '1', 'yes', 'on')
+
+
+def get_env_int(key: str, default: int = 0) -> int:
+    """환경 변수에서 정수 값을 가져옵니다."""
+    try:
+        return int(os.environ.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
 
 @dataclass
 class Config:
@@ -63,8 +85,8 @@ class Config:
     # =========================================
     # RTSP 및 프레임 처리 설정
     # =========================================
-    rtsp_host: str = "127.0.0.1"
-    rtsp_port: int = 8554
+    rtsp_host: str = field(default_factory=lambda: get_env("RTSP_HOST", "127.0.0.1"))
+    rtsp_port: int = field(default_factory=lambda: get_env_int("RTSP_PORT", 8554))
     frame_width: int = 640
     frame_height: int = 360
     jpeg_quality: int = 60
@@ -98,17 +120,25 @@ class Config:
     # =========================================
     # Redis 설정
     # =========================================
-    redis_host: str = "localhost"
-    redis_port: int = 6379
+    redis_host: str = field(default_factory=lambda: get_env("REDIS_HOST", "localhost"))
+    redis_port: int = field(default_factory=lambda: get_env_int("REDIS_PORT", 6379))
     redis_db: int = 0
-    redis_password: Optional[str] = None
+    redis_password: Optional[str] = field(default_factory=lambda: get_env("REDIS_PASSWORD", None))
     redis_analysis_cameras_key: str = "analysis:cameras"
     redis_update_channel: str = "camera:analysis:update"
-    
+
+    # =========================================
+    # Qdrant 설정 (벡터 데이터베이스)
+    # =========================================
+    qdrant_host: str = field(default_factory=lambda: get_env("QDRANT_HOST", "aegis-qdrant"))
+    qdrant_port: int = field(default_factory=lambda: get_env_int("QDRANT_PORT", 6333))
+    qdrant_enabled: bool = field(default_factory=lambda: get_env_bool("QDRANT_ENABLED", True))
+    embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+
     # =========================================
     # 로깅 설정
     # =========================================
-    log_level: str = "INFO"
+    log_level: str = field(default_factory=lambda: get_env("LOG_LEVEL", "INFO"))
 
     def __post_init__(self):
         """

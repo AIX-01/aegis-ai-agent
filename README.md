@@ -150,14 +150,88 @@ python -m src.app --real-vlm --real-backend
 
 ### Docker 실행
 
-```dockerfile
-FROM python:3.13-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY src/ ./src/
-CMD ["python", "-m", "src.app"]
+#### 1. Docker Compose로 실행 (권장)
+
+```bash
+# 환경 변수 파일 생성
+cp .env.example .env
+
+# Mock 모드로 실행 (개발/테스트)
+docker-compose up -d
+
+# 로그 확인
+docker-compose logs -f aegis-agent
+
+# 종료
+docker-compose down
 ```
+
+#### 2. Docker 단독 빌드 및 실행
+
+```bash
+# 이미지 빌드
+docker build -t aegis-ai-agent .
+
+# Mock 모드 실행
+docker run -d \
+  --name aegis-agent \
+  -p 8000:8000 \
+  -p 8001:8001 \
+  -p 8002:8002 \
+  -p 8088:8088 \
+  -e REDIS_HOST=host.docker.internal \
+  -e RTSP_HOST=host.docker.internal \
+  aegis-ai-agent
+
+# 실제 서버 모드 실행
+docker run -d \
+  --name aegis-agent \
+  -p 8000:8000 \
+  -e MOCK_MODE=false \
+  -e REDIS_HOST=redis \
+  -e BACKEND_HOST=aegis-backend \
+  --network aegis-infra_default \
+  aegis-ai-agent python -m src.app --no-mock
+```
+
+#### 3. aegis-infra와 통합 실행
+
+aegis-infra의 docker-compose.yml에 다음을 추가하세요:
+
+```yaml
+services:
+  aegis-agent:
+    build:
+      context: ../aegis-ai-agent
+      dockerfile: Dockerfile
+    container_name: aegis-agent
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - RTSP_HOST=mediamtx
+      - BACKEND_HOST=aegis-backend
+      - MOCK_MODE=false
+    depends_on:
+      - redis
+      - mediamtx
+    command: ["python", "-m", "src.app", "--no-mock"]
+```
+
+#### 환경 변수
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `REDIS_HOST` | `localhost` | Redis 호스트 |
+| `REDIS_PORT` | `6379` | Redis 포트 |
+| `REDIS_PASSWORD` | - | Redis 비밀번호 |
+| `RTSP_HOST` | `127.0.0.1` | MediaMTX 호스트 |
+| `RTSP_PORT` | `8554` | RTSP 포트 |
+| `BACKEND_HOST` | `localhost` | 백엔드 호스트 |
+| `BACKEND_PORT` | `8080` | 백엔드 포트 |
+| `MOCK_MODE` | `true` | Mock 서버 사용 여부 |
+| `LOG_LEVEL` | `INFO` | 로깅 레벨 |
 
 ---
 
