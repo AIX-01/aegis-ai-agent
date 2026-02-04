@@ -11,7 +11,6 @@ from typing import Optional
 from ..graph.analysis_graph import build_graph
 from ..clients.vlm_client import VLMClient
 from ..clients.backend_client import BackendClient
-from ..clients.storage_client import StorageClient
 from ..core.muxer import mux_packets_to_mp4
 
 
@@ -47,7 +46,6 @@ class ConsumerPool:
         # 클라이언트 초기화
         self.vlm_client = VLMClient(config)
         self.backend_client = BackendClient(config)
-        self.storage_client = StorageClient(config)
 
         # LangGraph 워크플로우 빌드
         self.logger.info("LangGraph 워크플로우를 빌드합니다...")
@@ -176,33 +174,40 @@ class ConsumerPool:
                         source_stream = self.source_streams.get(camera_id)
 
                         if buffer and source_stream:
-                            # 2-1) PacketBuffer에서 30초 전체 패킷 추출 (고정 길이)
+                            # 2-1) PacketBuffer에서 30초 전체 패킷 추출
                             packets = buffer.get_full_buffer(clip_duration=self.config.video_buffer_seconds)
                             worker_logger.debug(f"[{camera_id}] 추출된 패킷 수: {len(packets)}")
 
-                            # 2-2) Muxing: 패킷을 MP4 파일로 변환 (Keyframe 보정 포함)
+                            # 2-2) Muxing: 패킷을 fMP4로 변환
                             mp4_file = mux_packets_to_mp4(packets, source_stream)
                             
-                            # 파일 크기 검증: 0바이트 파일은 업로드하지 않음
+                            # 파일 크기 검증
                             file_size = mp4_file.getbuffer().nbytes
                             if file_size == 0:
                                 worker_logger.warning(f"[{camera_id}] 클립 생성 실패: 0바이트 (패킷 수: {len(packets)})")
                             else:
-                                # 2-3) S3 업로드: 생성된 MP4를 저장소에 저장
-                                clip_url = self.storage_client.upload_clip(mp4_file, event_id)
+                                # 2-3) presigned URL 요청
+                                upload_url = self.backend_client.get_clip_upload_url(event_id)
 
-                                # 2-4) 백엔드 알림: 클립 확정 API 호출
-                                if clip_url:
-                                    worker_logger.info(f"[{camera_id}] 클립 업로드 완료: {file_size} bytes")
-                                    self.backend_client.confirm_event_clip(event_id)
+                                if upload_url:
+                                    # 2-4) presigned URL로 직접 업로드
+                                    mp4_data = mp4_file.getvalue()
+                                    upload_success = self.backend_client.upload_clip(upload_url, mp4_data)
+
+                                    if upload_success:
+                                        # 2-5) 업로드 완료 확인
+                                        self.backend_client.confirm_event_clip(event_id)
+                                        worker_logger.info(f"[{camera_id}] 클립 업로드 완료: {file_size} bytes")
+                                    else:
+                                        worker_logger.error(f"[{camera_id}] 클립 업로드 실패")
+                                else:
+                                    worker_logger.error(f"[{camera_id}] presigned URL 획득 실패")
                         else:
-                            # 버퍼 또는 스트림 정보가 없는 경우 상세 로그
                             has_buffer = camera_id in self.packet_buffers
                             has_stream = camera_id in self.source_streams
                             worker_logger.warning(
                                 f"[{camera_id}] 클립 생성 불가 - "
-                                f"버퍼 등록: {has_buffer}, 스트림 등록: {has_stream}, "
-                                f"등록된 카메라: {list(self.source_streams.keys())}"
+                                f"버퍼 등록: {has_buffer}, 스트림 등록: {has_stream}"
                             )
 
                     except Exception as e:
