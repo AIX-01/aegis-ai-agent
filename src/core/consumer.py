@@ -172,18 +172,15 @@ class ConsumerPool:
 
                     # [Step 2: 영상 클립 처리 파이프라인]
                     try:
-                        # 2-1) PacketBuffer에서 해당 시점의 패킷들 추출
-                        start_ts = frame_timestamps[0].timestamp() if frame_timestamps else time.time() - 10
-                        end_ts = frame_timestamps[-1].timestamp() if frame_timestamps else time.time()
-                        
                         buffer = self.packet_buffers.get(camera_id)
                         source_stream = self.source_streams.get(camera_id)
 
                         if buffer and source_stream:
-                            # 2-2) Muxing: 패킷을 MP4 파일로 변환 (Keyframe 보정 포함)
-                            packets = buffer.get_packets(start_ts, end_ts)
+                            # 2-1) PacketBuffer에서 30초 전체 패킷 추출 (고정 길이)
+                            packets = buffer.get_full_buffer(clip_duration=self.config.video_buffer_seconds)
                             worker_logger.debug(f"[{camera_id}] 추출된 패킷 수: {len(packets)}")
 
+                            # 2-2) Muxing: 패킷을 MP4 파일로 변환 (Keyframe 보정 포함)
                             mp4_file = mux_packets_to_mp4(packets, source_stream)
                             
                             # 파일 크기 검증: 0바이트 파일은 업로드하지 않음

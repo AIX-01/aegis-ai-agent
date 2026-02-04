@@ -100,3 +100,41 @@ class PacketBuffer:
                 result_packets.append(pkt)
 
             return result_packets
+
+    def get_full_buffer(self, clip_duration: int = 30) -> List[av.Packet]:
+        """
+        버퍼에 저장된 최근 N초 분량의 전체 패킷을 추출합니다.
+
+        Args:
+            clip_duration: 추출할 클립 길이(초). 기본값 30초.
+
+        Returns:
+            키프레임으로 시작하는 패킷 리스트
+        """
+        with self.lock:
+            if not self.buffer:
+                return []
+
+            buffer_list = list(self.buffer)
+            now = time.time()
+
+            # 클립 시작 시점 계산 (현재 - clip_duration)
+            target_start_ts = now - clip_duration
+
+            # 시작 인덱스 찾기
+            target_start_idx = 0
+            for i, (ts, pkt) in enumerate(buffer_list):
+                if ts >= target_start_ts:
+                    target_start_idx = i
+                    break
+
+            # 키프레임 백트래킹
+            final_start_idx = target_start_idx
+            for i in range(target_start_idx, -1, -1):
+                if buffer_list[i][1].is_keyframe:
+                    final_start_idx = i
+                    break
+
+            # 시작점부터 끝까지 모든 패킷 반환
+            return [pkt for ts, pkt in buffer_list[final_start_idx:]]
+
