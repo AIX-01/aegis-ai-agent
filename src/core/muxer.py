@@ -8,6 +8,82 @@ import av
 
 logger = logging.getLogger("aegis-agent.muxer")
 
+
+def _faststart_in_memory(data: bytes) -> bytes:
+    """
+    메모리 내에서 moov atom을 파일 앞으로 이동하여 스트리밍 재생을 지원합니다.
+
+    일반 MP4는 moov atom이 파일 끝에 위치하여 전체 다운로드 후에만 재생 가능합니다.
+    이 함수는 moov를 ftyp 다음으로 이동하여 progressive download를 가능하게 합니다.
+    """
+    if len(data) < 8:
+        return data
+
+    # 모든 top-level atom 파싱
+    atoms = []
+    pos = 0
+    while pos < len(data):
+        if pos + 8 > len(data):
+            break
+
+        size = int.from_bytes(data[pos:pos+4], 'big')
+        atom_type = data[pos+4:pos+8]
+
+        if size == 0:  # atom이 파일 끝까지
+            size = len(data) - pos
+        elif size == 1:  # 64비트 확장 크기
+            if pos + 16 > len(data):
+                break
+            size = int.from_bytes(data[pos+8:pos+16], 'big')
+
+        if size < 8 or pos + size > len(data):
+            break
+
+        atoms.append((atom_type, data[pos:pos+size]))
+        pos += size
+
+    # moov 위치 확인
+    moov_idx = None
+    ftyp_idx = None
+    for i, (atom_type, _) in enumerate(atoms):
+        if atom_type == b'moov':
+            moov_idx = i
+        elif atom_type == b'ftyp':
+            ftyp_idx = i
+
+    # moov가 없거나 이미 앞에 있으면 그대로 반환
+    if moov_idx is None:
+        logger.warning("moov atom을 찾을 수 없습니다.")
+        return data
+
+    if ftyp_idx is not None and moov_idx == ftyp_idx + 1:
+        logger.debug("moov가 이미 ftyp 다음에 위치합니다.")
+        return data
+
+    # 재조합: ftyp + moov + 나머지
+    result = io.BytesIO()
+
+    # ftyp 먼저
+    for atom_type, atom_data in atoms:
+        if atom_type == b'ftyp':
+            result.write(atom_data)
+            break
+
+    # moov 다음
+    for atom_type, atom_data in atoms:
+        if atom_type == b'moov':
+            result.write(atom_data)
+            break
+
+    # 나머지 (ftyp, moov 제외)
+    for atom_type, atom_data in atoms:
+        if atom_type not in (b'ftyp', b'moov'):
+            result.write(atom_data)
+
+    logger.debug(f"moov 재배치 완료: {len(data)} → {result.tell()} bytes")
+    return result.getvalue()
+
+
 def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.VideoStream) -> io.BytesIO:
     """
     재인코딩 없이 패킷 리스트를 MP4 컨테이너로 Muxing(Remuxing)합니다.
@@ -33,12 +109,11 @@ def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.
     output_container = None
 
     try:
-        # MP4 포맷 옵션: 메모리 스트림에서 seek 가능하도록 설정
+        # 일반 MP4로 생성 (moov가 파일 끝에 위치, 후처리로 앞으로 이동)
         output_container = av.open(
             output_buffer,
             mode='w',
-            format='mp4',
-            options={'movflags': 'frag_keyframe+empty_moov'}
+            format='mp4'
         )
 
         # 출력 스트림 생성: 원본 스트림의 코덱 설정을 복제
@@ -110,5 +185,10 @@ def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.
         logger.warning("Muxing 결과가 0바이트입니다.")
         return io.BytesIO()
 
-    logger.info(f"Muxing 완료: {file_size} bytes")
-    return output_buffer
+    # moov atom을 앞으로 이동 (스트리밍 재생 지원)
+    original_data = output_buffer.getvalue()
+    faststart_data = _faststart_in_memory(original_data)
+
+    result = io.BytesIO(faststart_data)
+    logger.info(f"Muxing 완료: {len(faststart_data)} bytes (faststart)")
+    return result
