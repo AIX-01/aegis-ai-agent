@@ -106,10 +106,20 @@ class FrameProducer(threading.Thread):
             self.container = av.open(self.rtsp_url, options=options)
             self.reconnect_attempt = 0
             
-            # 스트림 정보 공유 딕셔너리에 등록 (Muxing 시 사용)
+            # 스트림 메타데이터 저장 (Muxing 시 사용)
+            # stream 객체 자체는 컨테이너 재연결 시 무효화되므로 메타데이터만 복사
             if self.source_streams_dict is not None and self.container.streams.video:
-                self.source_streams_dict[self.camera_id] = self.container.streams.video[0]
-            
+                video_stream = self.container.streams.video[0]
+                self.source_streams_dict[self.camera_id] = {
+                    'codec_name': video_stream.codec_context.name,
+                    'width': video_stream.width,
+                    'height': video_stream.height,
+                    'pix_fmt': video_stream.pix_fmt,
+                    'time_base': video_stream.time_base,
+                    'average_rate': video_stream.average_rate,
+                    'extradata': bytes(video_stream.codec_context.extradata) if video_stream.codec_context.extradata else None,
+                }
+
             self.logger.info("스트림 연결 성공.")
             return True
             
@@ -183,9 +193,13 @@ class FrameProducer(threading.Thread):
                     # ==========================================
                     # 경로 B: 패킷 버퍼링 (저장용)
                     # ==========================================
-                    # 패킷 자체를 메모리 버퍼에 저장 (Re-Muxing 시 사용)
-                    # 주의: decode()를 호출하면 패킷 데이터가 소비되지 않음 (PyAV는 내부적으로 처리)
-                    self.packet_buffer.add_packet(packet)
+                    # 패킷 데이터를 복사하여 저장 (원본 패킷은 demux 루프에서 재사용됨)
+                    packet_copy = av.Packet(bytes(packet))
+                    packet_copy.pts = packet.pts
+                    packet_copy.dts = packet.dts
+                    packet_copy.time_base = packet.time_base
+                    packet_copy.is_keyframe = packet.is_keyframe
+                    self.packet_buffer.add_packet(packet_copy)
                     self.total_packets_received += 1
 
                     # ==========================================
