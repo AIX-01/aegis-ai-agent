@@ -106,10 +106,20 @@ class FrameProducer(threading.Thread):
             self.container = av.open(self.rtsp_url, options=options)
             self.reconnect_attempt = 0
             
-            # 스트림 정보 공유 딕셔너리에 등록 (Muxing 시 사용)
+            # 스트림 메타데이터 저장 (Muxing 시 사용)
+            # stream 객체 자체는 컨테이너 재연결 시 무효화되므로 메타데이터만 복사
             if self.source_streams_dict is not None and self.container.streams.video:
-                self.source_streams_dict[self.camera_id] = self.container.streams.video[0]
-            
+                video_stream = self.container.streams.video[0]
+                self.source_streams_dict[self.camera_id] = {
+                    'codec_name': video_stream.codec_context.name,
+                    'width': video_stream.width,
+                    'height': video_stream.height,
+                    'pix_fmt': video_stream.pix_fmt,
+                    'time_base': video_stream.time_base,
+                    'average_rate': video_stream.average_rate,
+                    'extradata': bytes(video_stream.codec_context.extradata) if video_stream.codec_context.extradata else None,
+                }
+
             self.logger.info("스트림 연결 성공.")
             return True
             
