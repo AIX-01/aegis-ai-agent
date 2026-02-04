@@ -40,50 +40,55 @@
 ```
 src/
 ├── __init__.py
-├── app.py                  # 메인 진입점 및 에이전트 오케스트레이터
+├── app.py                  # 메인 진입점 (FastAPI + AegisAgent 오케스트레이터)
 ├── config.py               # 중앙 설정 관리 (Config 데이터클래스)
-├── utils.py                # 공용 유틸리티 (로깅, 백오프 로직 등)
+├── utils.py                # 공용 유틸리티 (로깅, 시그널 핸들러, 지수 백오프)
 ├── api/
-│   ├── api_server.py       # FastAPI 기반 상태 조회 API
+│   ├── api_server.py       # 독립 실행용 FastAPI 서버 (app.py와 중복 - 미사용)
 │   └── mock_server.py      # 통합 테스트용 Mock 서버 (VLM/LLM/Backend)
 ├── clients/
-│   ├── backend_client.py   # 스프링부트 백엔드 연동 (3단계 보고)
+│   ├── backend_client.py   # 스프링부트 백엔드 연동 (이벤트 생성/갱신/클립 업로드)
 │   ├── precision_client.py # 정밀 분석 LLM 서버 연동
 │   ├── vlm_client.py       # VLM 분석 서버 연동
-│   ├── storage_client.py   # S3/MinIO 영상 업로드
-│   └── vector_store_client.py # RAG용 Vector DB 연동 (TBD)
+│   └── vector_store_client.py # RAG용 Vector DB 연동 (미구현 - 빈 클래스)
 ├── core/
-│   ├── producer.py         # PyAV 기반 실시간 패킷 수집기
-│   ├── packet_buffer.py    # 30초 원형 버퍼 및 키프레임 보정
-│   ├── muxer.py            # MP4 컨테이너 Remuxing 유틸리티
-│   ├── consumer.py         # 분석 실행 및 LangGraph 호출자 (VLM 1차 분석 포함)
-│   ├── queue_manager.py    # 분석 작업 큐 관리
-│   ├── windowing.py        # 프레임 윈도우 슬라이딩 관리
+│   ├── producer.py         # PyAV 기반 RTSP 패킷 수집 (분석/저장 이원화)
+│   ├── packet_buffer.py    # 30초 원형 버퍼 및 키프레임 백트래킹
+│   ├── muxer.py            # MP4 Remuxing (faststart, edts 제거, 해상도 패치)
+│   ├── consumer.py         # VLM 분석 + 클립 생성 + LangGraph 실행
+│   ├── queue_manager.py    # 오버플로우 보호 작업 큐
+│   ├── windowing.py        # 프레임 슬라이딩 윈도우 생성기
 │   └── redis_manager.py    # Redis Pub/Sub 기반 카메라 동적 동기화
 ├── graph/
 │   ├── analysis_graph.py   # LangGraph 워크플로우 빌더 및 컴파일
-│   ├── state.py            # 파이프라인 전역 상태 (AnalysisState)
-│   ├── nodes/              # 그래프 실행 유닛 (Nodes)
-│   │   ├── verification.py, precision_analysis.py, update_backend.py,
-│   │   └── action.py, generate_report.py
-│   └── edges/              # 조건부 분기 로직 (Routers)
-├── retrieval/              # RAG (검색 증강 생성) 모듈 (TBD)
-│   ├── indexer.py          # 벡터 데이터 인덱서
-│   └── retriever_factory.py # 검색기 팩토리
-└── tools/                  # 분석 보조 도구 (TBD)
-    └── search_tools.py     # 매뉴얼 검색 등 도구 모음
+│   ├── state.py            # 파이프라인 전역 상태 (AnalysisState TypedDict)
+│   ├── nodes/
+│   │   ├── verification.py     # 검증 노드 (미구현 - 임시 ABNORMAL 반환)
+│   │   ├── precision_analysis.py # 정밀 분석 LLM 호출
+│   │   ├── update_backend.py   # 백엔드 이벤트 갱신
+│   │   ├── action.py           # 대응 조치 결정 (미구현 - 빈 리스트 반환)
+│   │   └── generate_report.py  # 보고서 생성 (미구현)
+│   └── edges/
+│       └── routers.py      # 조건부 분기 (analysis_router, verification_router)
+├── retrieval/              # RAG 모듈 (미구현)
+│   ├── indexer.py          # 문서 인덱싱 (미구현 - 경고 로그만)
+│   └── retriever_factory.py # Retriever 팩토리 (미구현 - None 반환)
+└── tools/                  # 분석 보조 도구 (미구현)
+    └── search_tools.py     # 매뉴얼/사례 검색 (미구현 - 하드코딩 문자열)
 ```
 
 ---
 
 ## 🧩 주요 컴포넌트 역할
 
-- **`Producer` (수집가)**: RTSP 스트림을 패킷 단위로 수집하며, 분석용 디코딩과 저장용 패킷 버퍼링을 병렬 처리합니다.
-- **`PacketBuffer` (저장소)**: 최근 30초의 패킷을 보유하며, **키프레임 역추적**을 통해 영상 클립의 시작점 품질을 보장합니다.
-- **`Muxer` (포장공)**: 잘라낸 원본 패킷의 시간 정보(PTS/DTS)를 보정하여 MP4 컨테이너에 담아내는 고속 유틸리티입니다.
-- **`Consumer` (중재자)**: VLM 분석 결과를 기반으로 백엔드 보고, 영상 클립 생성/업로드, LangGraph 추론 실행을 총괄합니다.
-- **`StorageClient` (배달원)**: 생성된 MP4 파일을 S3에 업로드하고 백엔드 형식에 맞는 경로 문자열을 생성합니다.
-- **`RedisManager` (관제탑)**: 백엔드의 카메라 설정 변경을 실시간 감지하여 에이전트의 동작 상태를 동적으로 제어합니다.
+- **`Producer` (수집가)**: RTSP 스트림을 PyAV로 수신하여 두 경로로 처리합니다.
+  - **Path A (분석)**: 패킷을 디코딩하여 JPG 이미지 생성 → WindowManager로 전달
+  - **Path B (저장)**: 원본 패킷을 PacketBuffer에 30초간 보관
+- **`PacketBuffer` (저장소)**: 최근 30초의 패킷을 deque로 보유하며, 클립 추출 시 **키프레임 역추적**으로 시작점 품질 보장.
+- **`Muxer` (포장공)**: 패킷을 MP4로 변환 (faststart, edts 제거, avc1/tkhd 해상도 패치, stco 오프셋 보정).
+- **`Consumer` (중재자)**: ThreadPoolExecutor 기반 워커 풀. VLM 분석 → 백엔드 보고 → 클립 생성/업로드 → LangGraph 실행.
+- **`BackendClient` (통신병)**: 이벤트 생성(POST), 분석 결과 갱신(PATCH), presigned URL 요청, 클립 업로드(PUT), 업로드 확인(POST).
+- **`RedisManager` (관제탑)**: Redis Pub/Sub으로 카메라 목록 변경 감지 → Producer 동적 추가/제거.
 
 ---
 
@@ -383,3 +388,54 @@ class AnalysisState(TypedDict):
     rag_references: list    # -- 작업중 --
     errors: List[str]
 ```
+
+---
+
+## 🐛 Known Issues
+
+> 최종 감사일: 2026-02-04
+
+### 미구현 코드 (TBD / Placeholder)
+
+| 파일 | 함수/클래스 | 현재 동작 | 설명 |
+|------|-------------|----------|------|
+| `retrieval/retriever_factory.py` | `create_retriever()` | `None` 반환 + 경고 로그 | RAG Retriever 생성 로직 미구현 |
+| `retrieval/indexer.py` | `index_document()` | 경고 로그만 출력 | 문서 임베딩/인덱싱 로직 미구현 |
+| `tools/search_tools.py` | `search_manual()` | 하드코딩 문자열 반환 | 대응 매뉴얼 검색 미구현 |
+| `tools/search_tools.py` | `search_past_cases()` | 하드코딩 문자열 반환 | 유사 과거 사례 검색 미구현 |
+| `clients/vector_store_client.py` | `VectorStoreClient` | `pass` (빈 클래스) | Vector DB 클라이언트 미구현 |
+| `graph/nodes/verification.py` | `verification_node()` | 무조건 `{"risk_level": "ABNORMAL"}` 반환 | 검증 로직 미정 - 임시 구현 |
+| `graph/nodes/action.py` | `action_node()` | `{"actions": []}` 반환 | 대응 조치 결정 로직 미구현 |
+| `graph/nodes/generate_report.py` | `generate_report_node()` | `{"report": "Not Implemented"}` 반환 | RAG 기반 보고서 생성 미구현 |
+
+### 고아 코드 (Orphan Code)
+
+| 파일 | 상태 | 설명 |
+|------|------|------|
+| `api/api_server.py` | 미사용 | `app.py`에 FastAPI가 통합되어 있어 중복. 독립 실행 시에만 사용 가능하나 현재 미사용 상태. 삭제 또는 통합 검토 필요. |
+
+### 논리적 불일치
+
+| 파일:라인 | 문제 | 영향 |
+|-----------|------|------|
+| `config.py:19-20` | `_real_vlm_endpoint`, `_real_precision_endpoint`에 `<실제 VLM 서버 IP>` 플레이스홀더 하드코딩 | 운영 배포 시 수정 누락 가능. 환경변수로 전환 권장 |
+| `graph/state.py:8` | `EventType = Literal["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]`에 "UNKNOWN" 미정의 | `precision_analysis.py:44`에서 `"UNKNOWN".upper()` 사용 시 타입 불일치 |
+| `config.py:56` | `storage_client.py` 언급되어 있으나 실제 파일 없음 | README/주석과 실제 코드 불일치 (S3 업로드는 backend_client.py에 통합됨) |
+
+### 비효율적 코드
+
+| 파일:라인 | 문제 | 영향 | 권장 조치 |
+|-----------|------|------|----------|
+| `core/producer.py:196-217` | 모든 패킷을 `packet.decode()`로 디코딩 후 FPS 제어로 대부분 버림 | CPU 낭비 (1fps 설정 시 10fps 스트림에서 90% 버림) | 키프레임 기반 선택적 디코딩 또는 디코딩 스킵 로직 검토 |
+| `core/windowing.py:70-92` | `_window_loop`에서 0.1초마다 전체 카메라 버퍼를 `for` 루프로 순회 | 카메라 수 증가 시 CPU 부하 증가 | 이벤트 기반 또는 카메라별 타이머 처리 검토 |
+| `core/consumer.py:86-87` | VLM 분석 실패 시 `continue`로 건너뛰지만 실패 원인 상세 로깅 부족 | 디버깅 어려움 | 실패 원인별 상세 로깅 추가 |
+
+### 보안 이슈
+
+| 파일 | 문제 | 심각도 | 권장 조치 |
+|------|------|--------|----------|
+| `config.py:19-25` | 실제 서버 IP/엔드포인트가 소스코드에 하드코딩 가능 | 🟡 중간 | 환경변수 또는 외부 설정 파일로 분리 |
+| `clients/backend_client.py` | 모든 HTTP 통신이 `http://`로 수행 (내부망 가정) | 🟢 낮음 | 운영환경에서 TLS(HTTPS) 적용 필요 |
+| `api/mock_server.py` | Mock 서버가 `0.0.0.0`에 바인딩되어 외부 접근 가능 | 🟢 낮음 | 개발환경 전용임을 명시하고 운영환경에서 비활성화 확인 필요 |
+
+
