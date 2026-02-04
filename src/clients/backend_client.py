@@ -147,40 +147,33 @@ class BackendClient:
 
         return False
 
-    def update_event_clip(self, event_id: str, clip_url: str) -> bool:
+    def confirm_event_clip(self, event_id: str) -> bool:
         """
-        생성된 영상 클립의 경로를 백엔드에 업데이트합니다.
-        PATCH /internal/agent/events/{event_id}/clip
+        클립 확정 API 호출 (temp/clips → clips 이동)
+        POST /internal/agent/events/{event_id}/clip (Body 없음)
 
         Args:
             event_id: 이벤트 ID
-            clip_url: 업로드된 클립의 경로 (/clips/temp/...)
 
         Returns:
             성공 여부
         """
-        # 템플릿에 event_id 적용
         endpoint = self.clip_endpoint_template.format(event_id=event_id)
-        
-        payload = {
-            "clipUrl": clip_url
-        }
 
         for attempt in range(self.max_retries):
             try:
-                response = requests.patch(
+                response = requests.post(
                     endpoint,
-                    json=payload,
                     timeout=self.timeout,
                     headers={"Content-Type": "application/json"},
                 )
                 response.raise_for_status()
                 
-                self.logger.info(f"✅ [백엔드 클립 업데이트 성공] Event ID: {event_id}, Path: {clip_url}")
+                self.logger.info(f"✅ [클립 확정 성공] Event ID: {event_id}")
                 return True
 
             except Exception as e:
-                self.logger.warning(f"❌ [백엔드 클립 업데이트 실패] {event_id}: {e}, 시도 {attempt + 1}")
+                self.logger.warning(f"❌ [클립 확정 실패] {event_id}: {e}, 시도 {attempt + 1}")
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
 

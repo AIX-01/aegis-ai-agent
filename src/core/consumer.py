@@ -38,9 +38,11 @@ class ConsumerPool:
         """
         self.config = config
         self.queue_manager = queue_manager
-        self.packet_buffers = packet_buffers or {}
-        self.source_streams = source_streams or {}
+        # None일 때만 새 딕셔너리 생성 (빈 딕셔너리 {} 참조 유지)
+        self.packet_buffers = packet_buffers if packet_buffers is not None else {}
+        self.source_streams = source_streams if source_streams is not None else {}
         self.logger = logging.getLogger("aegis-agent.consumer")
+
 
         # 클라이언트 초기화
         self.vlm_client = VLMClient(config)
@@ -171,13 +173,12 @@ class ConsumerPool:
                     # [Step 2: 영상 클립 처리 파이프라인]
                     try:
                         # 2-1) PacketBuffer에서 해당 시점의 패킷들 추출
-                        # VLM이 분석한 윈도우의 타임스탬프를 기준으로 패킷을 가져옵니다.
                         start_ts = frame_timestamps[0].timestamp() if frame_timestamps else time.time() - 10
                         end_ts = frame_timestamps[-1].timestamp() if frame_timestamps else time.time()
                         
                         buffer = self.packet_buffers.get(camera_id)
                         source_stream = self.source_streams.get(camera_id)
-                        
+
                         if buffer and source_stream:
                             # 2-2) Muxing: 패킷을 MP4 파일로 변환 (Keyframe 보정 포함)
                             packets = buffer.get_packets(start_ts, end_ts)
@@ -186,12 +187,19 @@ class ConsumerPool:
                             # 2-3) S3 업로드: 생성된 MP4를 저장소에 저장
                             clip_url = self.storage_client.upload_clip(mp4_file, event_id)
                             
-                            # 2-4) 백엔드 알림: 업로드된 경로를 백엔드 이벤트 정보에 업데이트
+                            # 2-4) 백엔드 알림: 클립 확정 API 호출
                             if clip_url:
-                                self.backend_client.update_event_clip(event_id, clip_url)
+                                self.backend_client.confirm_event_clip(event_id)
                         else:
-                            worker_logger.warning(f"[{camera_id}] 버퍼 또는 스트림 정보가 없어 클립을 생성하지 못했습니다.")
-                            
+                            # 버퍼 또는 스트림 정보가 없는 경우 상세 로그
+                            has_buffer = camera_id in self.packet_buffers
+                            has_stream = camera_id in self.source_streams
+                            worker_logger.warning(
+                                f"[{camera_id}] 클립 생성 불가 - "
+                                f"버퍼 등록: {has_buffer}, 스트림 등록: {has_stream}, "
+                                f"등록된 카메라: {list(self.source_streams.keys())}"
+                            )
+
                     except Exception as e:
                         worker_logger.error(f"[{camera_id}] 클립 생성/업로드 중 오류: {e}", exc_info=True)
 

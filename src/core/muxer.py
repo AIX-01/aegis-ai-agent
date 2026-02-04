@@ -32,9 +32,18 @@ def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.
     # 출력 컨테이너 열기 (mp4 포맷)
     output_container = av.open(output_buffer, mode='w', format='mp4')
 
-    # 출력 스트림 생성: 원본 스트림의 코덱 설정(H.264 등)을 그대로 복제합니다.
-    output_stream = output_container.add_stream(template=source_stream)
-    
+    # 출력 스트림 생성: 원본 스트림의 코덱 설정을 복제
+    # PyAV 16.x: codec_name을 첫 번째 인자로 전달해야 함
+    codec_name = source_stream.codec_context.name
+    output_stream = output_container.add_stream(codec_name, rate=source_stream.average_rate)
+
+    # 원본 스트림의 코덱 파라미터 복사
+    output_stream.width = source_stream.width
+    output_stream.height = source_stream.height
+    output_stream.pix_fmt = source_stream.pix_fmt
+    if source_stream.codec_context.extradata:
+        output_stream.codec_context.extradata = source_stream.codec_context.extradata
+
     first_pts = None
     first_dts = None
 

@@ -82,9 +82,9 @@ class Config:
     s3_endpoint: str = "http://localhost:9000" # MinIO 사용 시 필수, AWS S3 사용 시 빈 문자열 또는 실제 주소
     s3_access_key: str = "aegis"
     s3_secret_key: str = "trillion"
-    s3_bucket: str = "clips"
+    s3_bucket: str = "aegis"
     s3_secure: bool = False # HTTPS 사용 여부
-    clip_temp_path: str = "/temp" # 버킷 내에서 영상이 임시로 저장될 경로
+    clip_temp_path: str = "temp/clips" # 버킷 내에서 영상이 임시로 저장될 경로
 
 
     # =========================================

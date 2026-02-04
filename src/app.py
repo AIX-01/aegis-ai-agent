@@ -143,7 +143,7 @@ class AegisAgent:
                     
                     # PacketBuffer를 공유 딕셔너리에 등록
                     self.packet_buffers[cam_id] = producer.packet_buffer
-                    
+
                     producer.start()
                     self.producers[cam_id] = producer
 
