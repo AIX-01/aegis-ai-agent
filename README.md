@@ -203,8 +203,8 @@ _real_backend_update_endpoint: str = "http://<백엔드>:8080/internal/agent/eve
 | 설정 | 기본값 | 설명 |
 |------|--------|------|
 | `s3_endpoint` | `http://localhost:9000` | S3 또는 MinIO 엔드포인트 |
-| `s3_bucket` | `clips` | 영상 클립 저장 버킷명 |
-| `clip_temp_path` | `/temp` | 버킷 내 임시 저장 경로 |
+| `s3_bucket` | `aegis` | 영상 클립 저장 버킷명 |
+| `clip_temp_path` | `temp/clips` | 버킷 내 임시 저장 경로 |
 | `s3_secure` | `False` | SSL 사용 여부 |
 
 ### 분석 파이프라인 설정
