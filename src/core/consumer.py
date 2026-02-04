@@ -182,14 +182,22 @@ class ConsumerPool:
                         if buffer and source_stream:
                             # 2-2) Muxing: 패킷을 MP4 파일로 변환 (Keyframe 보정 포함)
                             packets = buffer.get_packets(start_ts, end_ts)
+                            worker_logger.debug(f"[{camera_id}] 추출된 패킷 수: {len(packets)}")
+
                             mp4_file = mux_packets_to_mp4(packets, source_stream)
                             
-                            # 2-3) S3 업로드: 생성된 MP4를 저장소에 저장
-                            clip_url = self.storage_client.upload_clip(mp4_file, event_id)
-                            
-                            # 2-4) 백엔드 알림: 클립 확정 API 호출
-                            if clip_url:
-                                self.backend_client.confirm_event_clip(event_id)
+                            # 파일 크기 검증: 0바이트 파일은 업로드하지 않음
+                            file_size = mp4_file.getbuffer().nbytes
+                            if file_size == 0:
+                                worker_logger.warning(f"[{camera_id}] 클립 생성 실패: 0바이트 (패킷 수: {len(packets)})")
+                            else:
+                                # 2-3) S3 업로드: 생성된 MP4를 저장소에 저장
+                                clip_url = self.storage_client.upload_clip(mp4_file, event_id)
+
+                                # 2-4) 백엔드 알림: 클립 확정 API 호출
+                                if clip_url:
+                                    worker_logger.info(f"[{camera_id}] 클립 업로드 완료: {file_size} bytes")
+                                    self.backend_client.confirm_event_clip(event_id)
                         else:
                             # 버퍼 또는 스트림 정보가 없는 경우 상세 로그
                             has_buffer = camera_id in self.packet_buffers
