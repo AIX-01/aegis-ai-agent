@@ -16,7 +16,7 @@ from ..utils import exponential_backoff
 class VLMClient:
     """VLM(Vision Language Model) API와 통신하기 위한 클라이언트"""
 
-    # VLM 분석을 위한 기본 시스템 프롬프트
+    # VLM 분석을 위한 기본 시스템 프롬프트 (사고 분류 기준)
     DEFAULT_PROMPT = """You are a video incident classifier.
 
         Input: frames at 1 FPS in chronological order. Predict what situation is occurring next.
@@ -38,6 +38,7 @@ class VLMClient:
         self.config = config
         self.logger = logging.getLogger("aegis-agent.vlm_client")
 
+        # 설정에서 엔드포인트 및 API 키 로드
         self.endpoint = config.vlm_endpoint
         self.api_key = getattr(config, "vlm_api_key", None)
         self.timeout = config.vlm_timeout
@@ -53,6 +54,7 @@ class VLMClient:
         
         is_real_mode = getattr(config, "real_vlm", False)
         if is_real_mode:
+            # 실제 서버 모드일 경우 OpenAI SDK 클라이언트 생성
             self.logger.info(f"실제 VLM 서버를 사용합니다: {self.endpoint} (Model: {self.model_id})")
             try:
                 self.client = OpenAI(
@@ -106,6 +108,7 @@ class VLMClient:
         for attempt in range(self.max_retries):
             try:
                 start_time = time.time()
+                # 1. OpenAI 호환 API 호출
                 response = self.client.chat.completions.create(
                     model=self.model_id,
                     messages=[{"role": "user", "content": content}],
@@ -113,13 +116,14 @@ class VLMClient:
                 )
                 duration = time.time() - start_time
                 
+                # 2. 응답 데이터 및 메타데이터 준비
                 raw_text = response.choices[0].message.content
-                self.logger.info(f"VLM 분석 완료: {camera_id}, 소요 시간: {duration:.2f}초")
-                self.logger.info(f"VLM Raw Response: \n{raw_text}")
+                window_range = f"({task_metadata.get('window_start', 0)}-{task_metadata.get('window_end', 0)})"
                 
+                # 결과 딕셔너리 생성
                 result = {"raw_output": raw_text, "analysis_duration": duration}
                 
-                # 결과 파싱 강화
+                # 3. 결과 파싱 (class1, class2 추출 및 정규화)
                 lines = raw_text.replace(',', '\n').split('\n')
                 for line in lines:
                     if '=' in line:
@@ -130,12 +134,24 @@ class VLMClient:
                             val = parts[1].strip().lower().strip('<>')
                             result[key] = val
                 
-                # class1이 없을 경우 키워드 검색
+                # class1이 없을 경우 키워드 검색으로 보완
                 if "class1" not in result:
                     if "normal" in raw_text.lower(): result["class1"] = "normal"
                     elif "abnormal" in raw_text.lower(): result["class1"] = "abnormal"
                     elif "suspicious" in raw_text.lower(): result["class1"] = "suspicious"
 
+                # 4. 상세 로그 출력 제어 (정상일 때는 결과만, 이상 상황일 때만 원문 출력)
+                if result.get("class1") == "normal":
+                    # 사용자 요청: NORMAL 상황에서는 결과 메시지만 깔끔하게 출력
+                    self.logger.info(f"[{camera_id}] {window_range} VLM 분석 결과: NORMAL입니다. (소요: {duration:.2f}초)")
+                    result["class1"] = "normal"
+                    result["class2"] = "none"
+                    result["risk_level"] = "NORMAL"
+                else:
+                    # 이상/의심 상황에서는 원본 응답을 포함하여 상세 정보 출력
+                    self.logger.info(f"[{camera_id}] {window_range} VLM 분석 완료, 소요 시간: {duration:.2f}초")
+                    self.logger.info(f"[{camera_id}] {window_range} VLM Raw Response: \n{raw_text}")
+                
                 self.total_success += 1
                 return result
 
@@ -153,7 +169,7 @@ class VLMClient:
         frames: List[bytes],
         task_metadata: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
-        """기존 requests 방식을 사용한 분석 수행 (Mock 서버용)"""
+        """기존 requests 방식을 사용한 분석 수행 (주로 Mock 서버용)"""
         payload = self._prepare_payload(camera_id, frames, task_metadata)
         for attempt in range(self.max_retries):
             try:
@@ -177,6 +193,7 @@ class VLMClient:
         frames: List[bytes],
         metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
+        """VLM API를 위한 일반 JSON 페이로드 준비"""
         encoded_frames = [base64.b64encode(frame).decode("utf-8") for frame in frames]
         return {
             "camera_id": camera_id,
@@ -188,6 +205,7 @@ class VLMClient:
         }
 
     def get_stats(self) -> Dict[str, int]:
+        """클라이언트 통계 조회"""
         return {
             "total_requests": self.total_requests,
             "total_success": self.total_success,
