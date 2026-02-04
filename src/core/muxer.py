@@ -26,35 +26,50 @@ def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.
         logger.warning("Muxing할 패킷이 없습니다.")
         return io.BytesIO()
 
-    # 메모리 내 출력 버퍼 생성 (디스크 I/O 없이 메모리에서만 작업하여 성능 극대화)
+    logger.info(f"Muxing 시작: {len(packets)}개 패킷")
+
+    # 메모리 내 출력 버퍼 생성
     output_buffer = io.BytesIO()
-    
-    # 출력 컨테이너 열기 (mp4 포맷)
-    output_container = av.open(output_buffer, mode='w', format='mp4')
-
-    # 출력 스트림 생성: 원본 스트림의 코덱 설정을 복제
-    # PyAV 16.x: codec_name을 첫 번째 인자로 전달해야 함
-    codec_name = source_stream.codec_context.name
-    output_stream = output_container.add_stream(codec_name, rate=source_stream.average_rate)
-
-    # 원본 스트림의 코덱 파라미터 복사
-    output_stream.width = source_stream.width
-    output_stream.height = source_stream.height
-    output_stream.pix_fmt = source_stream.pix_fmt
-    if source_stream.codec_context.extradata:
-        output_stream.codec_context.extradata = source_stream.codec_context.extradata
-
-    first_pts = None
-    first_dts = None
+    output_container = None
 
     try:
+        # MP4 포맷 옵션: 메모리 스트림에서 seek 가능하도록 설정
+        output_container = av.open(
+            output_buffer,
+            mode='w',
+            format='mp4',
+            options={'movflags': 'frag_keyframe+empty_moov'}
+        )
+
+        # 출력 스트림 생성: 원본 스트림의 코덱 설정을 복제
+        codec_name = source_stream.codec_context.name
+        output_stream = output_container.add_stream(codec_name, rate=source_stream.average_rate)
+
+        # 원본 스트림의 코덱 파라미터 복사
+        output_stream.width = source_stream.width
+        output_stream.height = source_stream.height
+        output_stream.pix_fmt = source_stream.pix_fmt
+        if source_stream.codec_context.extradata:
+            output_stream.codec_context.extradata = source_stream.codec_context.extradata
+
+        first_pts = None
+        first_dts = None
+        muxed_count = 0
+
         for packet in packets:
-            # 패킷 복제 (원본 스트림의 패킷 상태를 유지하기 위해 복사본 생성)
-            new_packet = av.Packet(packet)
+            # 패킷 데이터가 유효한지 확인
+            if packet.size == 0:
+                continue
+
+            # 패킷 복제: bytes로 변환 후 새 패킷 생성 (데이터 보존 보장)
+            packet_bytes = bytes(packet)
+            new_packet = av.Packet(packet_bytes)
             new_packet.stream = output_stream
-            
-            # [시작 시간 보정]
-            # 잘라낸 시점의 첫 패킷 시간을 0으로 설정하여 클립의 시작점을 맞춥니다.
+            new_packet.pts = packet.pts
+            new_packet.dts = packet.dts
+            new_packet.is_keyframe = packet.is_keyframe
+
+            # 시작 시간 보정
             if first_pts is None:
                 first_pts = new_packet.pts if new_packet.pts is not None else 0
                 first_dts = new_packet.dts if new_packet.dts is not None else 0
@@ -64,20 +79,39 @@ def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.
             if new_packet.dts is not None:
                 new_packet.dts -= first_dts
             
-            # [타임베이스 변환]
-            # 원본 스트림(예: RTSP)과 출력 MP4의 시간 단위(Timebase)가 다를 수 있으므로
-            # 비디오 규격에 맞게 시간 정보를 변환합니다.
+            # 타임베이스 변환
             new_packet.rescale_ts(source_stream.time_base, output_stream.time_base)
             
             output_container.mux(new_packet)
+            muxed_count += 1
 
-        # 컨테이너를 닫으며 MP4 헤더 등 메타데이터를 메모리에 최종 기록합니다.
-        output_container.close()
-        
+        logger.debug(f"Muxed 패킷 수: {muxed_count}/{len(packets)}")
+
     except Exception as e:
         logger.error(f"Muxing 중 오류 발생: {e}", exc_info=True)
+        if output_container:
+            try:
+                output_container.close()
+            except:
+                pass
         return io.BytesIO()
 
-    # 버퍼 포인터를 처음으로 되돌려, 이후 S3 업로드 시 처음부터 읽을 수 있도록 준비합니다.
+    finally:
+        # 컨테이너 종료 (MP4 메타데이터 기록)
+        if output_container:
+            try:
+                output_container.close()
+            except Exception as e:
+                logger.warning(f"컨테이너 close 중 경고: {e}")
+
+    # 버퍼 포인터를 처음으로 되돌림
     output_buffer.seek(0)
+
+    # 파일 크기 검증
+    file_size = output_buffer.getbuffer().nbytes
+    if file_size == 0:
+        logger.warning("Muxing 결과가 0바이트입니다.")
+        return io.BytesIO()
+
+    logger.info(f"Muxing 완료: {file_size} bytes")
     return output_buffer
