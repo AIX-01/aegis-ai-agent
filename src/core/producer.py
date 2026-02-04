@@ -183,9 +183,13 @@ class FrameProducer(threading.Thread):
                     # ==========================================
                     # 경로 B: 패킷 버퍼링 (저장용)
                     # ==========================================
-                    # 패킷 자체를 메모리 버퍼에 저장 (Re-Muxing 시 사용)
-                    # 주의: decode()를 호출하면 패킷 데이터가 소비되지 않음 (PyAV는 내부적으로 처리)
-                    self.packet_buffer.add_packet(packet)
+                    # 패킷 데이터를 복사하여 저장 (원본 패킷은 demux 루프에서 재사용됨)
+                    packet_copy = av.Packet(bytes(packet))
+                    packet_copy.pts = packet.pts
+                    packet_copy.dts = packet.dts
+                    packet_copy.time_base = packet.time_base
+                    packet_copy.is_keyframe = packet.is_keyframe
+                    self.packet_buffer.add_packet(packet_copy)
                     self.total_packets_received += 1
 
                     # ==========================================

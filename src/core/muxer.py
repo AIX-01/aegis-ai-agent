@@ -11,6 +11,33 @@ import av
 logger = logging.getLogger("aegis-agent.muxer")
 
 
+def _fix_ftyp_for_browser(data: bytearray) -> bytearray:
+    """
+    ftyp atom의 brand를 브라우저 호환 형식으로 수정합니다.
+    isom + avc1 조합이 가장 호환성이 좋습니다.
+    """
+    ftyp_idx = data.find(b'ftyp')
+    if ftyp_idx < 4:
+        return data
+
+    ftyp_start = ftyp_idx - 4
+    ftyp_size = struct.unpack('>I', data[ftyp_start:ftyp_start+4])[0]
+
+    # 새 ftyp: major_brand=isom, minor_version=512, compatible_brands=[isom,iso2,avc1,mp41]
+    new_ftyp = struct.pack('>I', 32) + b'ftyp'  # size + type
+    new_ftyp += b'isom'  # major brand
+    new_ftyp += struct.pack('>I', 512)  # minor version
+    new_ftyp += b'isom' + b'iso2' + b'avc1' + b'mp41'  # compatible brands
+
+    # 기존 ftyp 대체
+    result = bytearray()
+    result.extend(data[:ftyp_start])
+    result.extend(new_ftyp)
+    result.extend(data[ftyp_start + ftyp_size:])
+
+    return result
+
+
 def _find_atom(data: bytes, atom_type: bytes, start: int = 0) -> Tuple[int, int]:
     """
     MP4 atom(box)을 찾아 (offset, size)를 반환합니다.
@@ -178,9 +205,9 @@ def _faststart(data: bytes) -> bytes:
         logger.warning("mdat atom을 찾을 수 없습니다.")
         return data
 
-    # moov가 이미 mdat 앞에 있어도 edts 제거는 필요
+    # moov가 이미 mdat 앞에 있어도 edts 제거와 ftyp 수정은 필요
     if moov_offset < mdat_offset:
-        logger.debug("moov가 이미 mdat 앞에 있습니다. edts만 제거합니다.")
+        logger.debug("moov가 이미 mdat 앞에 있습니다. edts 제거 및 ftyp 수정.")
         # moov에서 edts 제거
         moov_data = bytearray(data[moov_offset:moov_offset + moov_size])
         cleaned_moov = _remove_edts(moov_data)
@@ -195,8 +222,12 @@ def _faststart(data: bytes) -> bytes:
             result.write(data[:moov_offset])
             result.write(bytes(cleaned_moov))
             result.write(data[moov_offset + moov_size:])
-            return result.getvalue()
-        return data
+            final_data = _fix_ftyp_for_browser(bytearray(result.getvalue()))
+            return bytes(final_data)
+
+        # edts가 없어도 ftyp는 수정
+        final_data = _fix_ftyp_for_browser(bytearray(data))
+        return bytes(final_data)
 
     logger.debug(f"faststart 적용: ftyp@{ftyp_offset}, mdat@{mdat_offset}, moov@{moov_offset}")
 
@@ -240,7 +271,10 @@ def _faststart(data: bytes) -> bytes:
     if moov_offset + moov_size < len(data):
         result.write(data[moov_offset + moov_size:])
 
-    return result.getvalue()
+    # 5. ftyp brand를 브라우저 호환으로 수정
+    final_data = _fix_ftyp_for_browser(bytearray(result.getvalue()))
+
+    return bytes(final_data)
 
 
 def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.VideoStream) -> io.BytesIO:

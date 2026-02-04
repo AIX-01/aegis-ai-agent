@@ -128,12 +128,26 @@ class PacketBuffer:
                     target_start_idx = i
                     break
 
-            # 키프레임 백트래킹
+            # 키프레임 백트래킹 (키프레임을 찾을 때까지 과거로)
             final_start_idx = target_start_idx
+            found_keyframe = False
             for i in range(target_start_idx, -1, -1):
                 if buffer_list[i][1].is_keyframe:
                     final_start_idx = i
+                    found_keyframe = True
                     break
+
+            # 키프레임을 못 찾으면 버퍼 전체에서 첫 키프레임 찾기
+            if not found_keyframe:
+                for i, (ts, pkt) in enumerate(buffer_list):
+                    if pkt.is_keyframe:
+                        final_start_idx = i
+                        found_keyframe = True
+                        break
+
+            # 그래도 못 찾으면 빈 리스트 반환
+            if not found_keyframe:
+                return []
 
             # 시작점부터 끝까지 모든 패킷 반환
             return [pkt for ts, pkt in buffer_list[final_start_idx:]]
