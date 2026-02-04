@@ -49,6 +49,7 @@ def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.
         output_stream.width = source_stream.width
         output_stream.height = source_stream.height
         output_stream.pix_fmt = source_stream.pix_fmt
+        output_stream.time_base = source_stream.time_base  # time_base 명시적 설정
         if source_stream.codec_context.extradata:
             output_stream.codec_context.extradata = source_stream.codec_context.extradata
 
@@ -67,21 +68,16 @@ def mux_packets_to_mp4(packets: List[av.Packet], source_stream: av.video.stream.
             new_packet.stream = output_stream
             new_packet.is_keyframe = packet.is_keyframe
 
-            # 시작 시간 보정 및 타임베이스 변환을 직접 계산
-            src_tb = source_stream.time_base
-            dst_tb = output_stream.time_base
-
+            # 시작 시간 보정 (타임베이스가 동일하므로 변환 불필요)
             if first_pts is None:
                 first_pts = packet.pts if packet.pts is not None else 0
                 first_dts = packet.dts if packet.dts is not None else 0
 
-            # PTS/DTS 보정 후 타임베이스 변환 (rescale_ts 대체)
+            # PTS/DTS 보정 (시작점을 0으로 맞춤)
             if packet.pts is not None:
-                adjusted_pts = packet.pts - first_pts
-                new_packet.pts = int(adjusted_pts * src_tb / dst_tb)
+                new_packet.pts = packet.pts - first_pts
             if packet.dts is not None:
-                adjusted_dts = packet.dts - first_dts
-                new_packet.dts = int(adjusted_dts * src_tb / dst_tb)
+                new_packet.dts = packet.dts - first_dts
 
             output_container.mux(new_packet)
             muxed_count += 1
