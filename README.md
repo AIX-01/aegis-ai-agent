@@ -151,18 +151,22 @@ graph TD
         ExtMgr -- "2. 'update' 발행" --> RedisCh
         RedisCh -- "3. 알림" --> RM
         
-        RM -- "4. 스트림 업데이트" --> P["5. Producer<br>(A: 분석용 디코딩 & B: 저장용 버퍼링)"]
-        P --> W["6. Window Manager"]
+        RM -- "4. 스트림 업데이트" --> P["5. Producer"]
+        P -- "Path A: 분석용 디코딩" --> W["6. Window Manager"]
+        P -- "Path B: 저장용 버퍼링" --> PB[("Packet Buffer")]
+        
         W --> Q["7. 작업 큐"]
         Q --> C["8. Consumer"]
         C --> VLM["9. VLM 1차 분석"]
         VLM --> Router{"10. 이상 감지 여부"}
         Router -- "이상/의심" --> BR["11. 1차 백엔드 보고<br>(event_id 발급)"]
         BR --> Clip["12. 영상 클립 생성 & 업로드<br>(PacketBuffer -> S3)"]
+        Clip -. "데이터 인출" .-> PB
         Router -- "정상" --> EndLocal(⏹️ End)
     end
 
     subgraph LangGraph["[2단계] LangGraph 분석/추론"]
+        Clip ~~~ Start
         Start("13. ▶ Start<br>(with event_id)")
         
         Start --> Router2{"14. 1차 분석 결과<br>(Conditional Entry)"}
@@ -179,7 +183,7 @@ graph TD
         N7 --> End
     end
 
-    Clip --> Start
+    Clip ==> Start
 ```
 
 ### 2. 상세 다이어그램 (Detailed Workflow with Data Flow)
@@ -199,18 +203,20 @@ graph TD
         direction TB
         
         %% Node Definitions
-        ExtMgr["1. 스프링부트 백엔드"]:::ext
+        ExtMgr["1. 스프링부트 백엔드 (발행)"]:::ext
         RedisCam[("Redis Storage<br>analysis:cameras")]:::ext
-        RedisCh[("2. Redis Pub/Sub<br>channel: camera:analysis:update")]:::ext
-        RM["3. RedisManager"]:::proc
-        P["4. Producer Pool"]:::proc
-        W["5. Window Manager"]:::proc
-        Q["6. 작업 큐"]:::proc
-        C["7. Consumer"]:::proc
-        N1["8. vlm_analysis<br>(VLM 1차 분석)"]:::proc
-        Router0{"9. 이상 감지?"}:::router
-        N2["10. backend_report<br>(1차 백엔드 보고)"]:::proc
-        Backend["11. 스프링부트 백엔드"]:::ext
+        RedisCh[("2. Redis Pub/Sub (채널)")]:::ext
+        RM["3. RedisManager (알림)"]:::proc
+        RM_Upd["4. RedisManager (업데이트)"]:::proc
+        P["5. Producer (분석/저장 이원화)"]:::proc
+        W["6. Window Manager"]:::proc
+        Q["7. Queue Manager"]:::proc
+        C["8. Consumer"]:::proc
+        N1["9. VLM Analysis (1차 분석)"]:::proc
+        Router0{"10. 이상 감지?"}:::router
+        N2["11. Backend Report (1차 보고)"]:::proc
+        Backend["스프링부트 백엔드"]:::ext
+        Clip["12. Clip Generation (클립 생성)"]:::proc
         EndLocal(⏹️ End):::proc
 
         %% Data Definitions
@@ -221,13 +227,15 @@ graph TD
         D_Res1[("Response<br>• eventId")]:::data
 
         %% Connections
-        ExtMgr -. "카메라 정보 SET" .-> RedisCam
+        ExtMgr -. "설정 SET" .-> RedisCam
         RM -. "구독" .-> RedisCh
         ExtMgr -- "'update' 발행" --> RedisCh
         RedisCh -- "알림" --> RM
-        RM -. "카메라 목록 조회" .-> RedisCam
-        RM -- "스트림 업데이트" --> P
-        P --> D_Frames
+        RM -. "목록 조회" .-> RedisCam
+        RM -- "변경 감지" --> RM_Upd
+        RM_Upd -- "스트림 업데이트" --> P
+        P -- "Path A (분석)" --> D_Frames
+        P -- "Path B (저장)" --> D_PB[("PacketBuffer<br>(원본 패킷 큐)")]
         D_Frames --> W
         W --> D_Window
         D_Window --> Q
@@ -240,11 +248,14 @@ graph TD
         N2 -.-> D_Req1
         D_Req1 -.-> Backend
         Backend -.-> D_Res1
+        D_Res1 ==> Clip
+        Clip -. "패킷 인출" .-> D_PB
     end
 
     subgraph LangGraph["[2단계] LangGraph 분석 및 다단계 추론 (graph)"]
         direction TB
-        
+
+        Clip ~~~ D_Input
         %% Node Definitions
         Router{"14. analysis_router<br>(Conditional Entry)"}:::router
         N_Verify["15. verification<br>(검증 노드)"]:::proc
@@ -267,7 +278,7 @@ graph TD
         Router -- "의심" --> N_Verify
         Router -- "이상" --> N_Precise
         N_Verify --> Router2
-        Router2 -- "정상" --> EndFinal
+        Router2 -- "의심" --> EndFinal
         Router2 -- "이상" --> N_Precise
         N_Precise --> D_Detail
         D_Detail --> N_Update
@@ -280,7 +291,7 @@ graph TD
     end
 
     %% Connection between subgraphs
-    D_Res1 ==> D_Input
+    Clip ==> D_Input
 ```
 
 ### [1단계] 동적 설정 및 실시간 영상 처리 (`core` 패키지)
