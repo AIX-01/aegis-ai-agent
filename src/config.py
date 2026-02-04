@@ -73,18 +73,9 @@ class Config:
     frame_height: int = 360
     jpeg_quality: int = 60
     fps: int = 1
-    # 비디오 패킷 버퍼링 시간 (초): 이상 행동 감지 시 추출할 영상의 최대 길이를 결정합니다。
+    # 비디오 패킷 버퍼링 시간 (초): 이상 행동 감지 시 추출할 영상의 최대 길이를 결정합니다
     video_buffer_seconds: int = 30
 
-    # =========================================
-    # S3 저장소 설정 (AWS S3 및 MinIO 호환)
-    # =========================================
-    s3_endpoint: str = "http://localhost:9000" # MinIO 사용 시 필수, AWS S3 사용 시 빈 문자열 또는 실제 주소
-    s3_access_key: str = "aegis"
-    s3_secret_key: str = "trillion"
-    s3_bucket: str = "aegis"
-    s3_secure: bool = False # HTTPS 사용 여부
-    clip_temp_path: str = "temp/clips" # 버킷 내에서 영상이 임시로 저장될 경로
 
 
     # =========================================
