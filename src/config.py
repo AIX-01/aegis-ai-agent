@@ -15,7 +15,9 @@ class Config:
     # ===================================================================
     # >> 1. 실제 서버 주소 설정 (이 부분을 실제 운영 서버에 맞게 수정하세요)
     # ===================================================================
-    _real_vlm_endpoint: str = "http://<실제 VLM 서버 IP>:8001/analyze"
+    _real_vlm_endpoint: str = "https://zo7s6f4133wx6k-8000.proxy.runpod.net/v1"
+    _real_vlm_api_key: str = "sk-IrR7Bwxtin0haWagUnPrBgq5PurnUz86"
+    _real_vlm_model_id: str = "AIX-01/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit-3000steps-r64-b8-merged-16bit"
     _real_precision_endpoint: str = "http://<실제 LLM 서버 IP>:8002/precision_analyze"
     
     # 백엔드 엔드포인트 분리 (생성용 / 갱신용)
@@ -46,6 +48,8 @@ class Config:
     # >> 3. 활성 엔드포인트 (수정 금지 - __post_init__에서 자동 설정됨)
     # ===================================================================
     vlm_endpoint: str = field(init=False)
+    vlm_api_key: Optional[str] = field(init=False, default=None)
+    vlm_model_id: str = field(init=False, default="vlm")
     precision_endpoint: str = field(init=False)
     backend_create_endpoint: str = field(init=False)
     backend_update_endpoint: str = field(init=False)
@@ -126,8 +130,12 @@ class Config:
         # VLM 엔드포인트 설정
         if self.real_vlm:
             self.vlm_endpoint = self._real_vlm_endpoint
+            self.vlm_api_key = self._real_vlm_api_key
+            self.vlm_model_id = getattr(self, "_real_vlm_model_id", "vlm")
         else:
             self.vlm_endpoint = f"http://localhost:{self.mock_vlm_port}/analyze"
+            self.vlm_api_key = "mock-key"
+            self.vlm_model_id = "mock-vlm"
 
         # 정밀 분석 엔드포인트 설정
         if self.real_precision:
