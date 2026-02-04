@@ -18,9 +18,17 @@ from .packet_buffer import PacketBuffer
 
 class FrameProducer(threading.Thread):
     """
-    RTSP 스트림을 PyAV로 수신하여
-    1. 원본 패킷을 PacketBuffer에 저장 (클립 생성용)
-    2. 프레임을 디코딩하여 VLM 분석 파이프라인으로 전달 (분석용)
+    RTSP 스트림을 PyAV로 수신하여 두 가지 경로로 처리하는 하이브리드 Producer입니다.
+
+    [경로 A: 실시간 분석 (Analysis Path)]
+    - 패킷을 비디오 프레임으로 디코딩합니다.
+    - 설정된 FPS에 맞춰 분석용 저해상도 JPG 이미지를 생성합니다.
+    - Consumer 큐(WindowManager)로 전달되어 VLM 분석의 입력값이 됩니다.
+
+    [경로 B: 영상 저장 (Storage Path)]
+    - 수신된 '원본 패킷'을 디코딩 없이 그대로 PacketBuffer에 저장합니다.
+    - VLM에서 이상 행동이 감지되었을 때, 이 버퍼에서 패킷을 꺼내 MP4 클립을 만듭니다.
+    - 재인코딩이 없으므로 CPU 부하가 매우 적고 원본 화질을 유지합니다.
     """
 
     def __init__(

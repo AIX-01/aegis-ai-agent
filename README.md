@@ -6,23 +6,30 @@
 
 ## 🛠️ 기술 스택
 
-| 분류 | 기술 |
-|------|------|
-| Language | Python 3.13 |
-| Framework | LangGraph 1.0, LangChain Core 1.2 |
-| API | FastAPI, Uvicorn |
-| 영상처리 | OpenCV (opencv-python) |
-| 캐시 | Redis |
-| HTTP | httpx, requests |
+| 분류 | 기술 | 비고 |
+|------|------|------|
+| Language | Python 3.12+ | 안정적인 멀티스레딩 환경 |
+| Framework | LangGraph 1.0, LangChain Core 1.2 | 상태 기반 다단계 추론 |
+| API | FastAPI, Uvicorn | 에이전트 모니터링 및 상태 조회 |
+| **영상처리** | **PyAV (av)** | 패킷 레벨 제어 및 초고속 Muxing |
+| **저장소** | **Boto3 (S3 / MinIO)** | 증거 영상 클립 저장 |
+| 캐시 | Redis | 동적 카메라 설정 및 상태 관리 |
+| HTTP | requests | 백엔드 및 AI 서버 통신 |
 
 ---
 
 ## 🎯 시스템 개요
 
 ### 핵심 개념
-- **하이브리드 아키텍처**: 고성능이 필수적인 실시간 영상 처리(프레임 캡처, 윈도우 관리)는 기존 Python 스레딩 방식을 유지하고, 복잡한 분석 및 추론 로직은 **LangGraph**를 사용해 명확하고 확장 가능하게 모델링합니다.
-- **상태 기반 워크플로우**: 모든 분석 과정은 `AnalysisState`라는 중앙 상태 객체를 통해 데이터를 주고받습니다. 각 분석 단계(노드)는 이 상태를 업데이트하며 다음 단계로 전달합니다.
-- **조건부 다단계 추론**: VLM 1차 분석에서 '이상'이 감지되면, 정밀 분석(LLM), 최종 보고서 생성 등 LangGraph로 정의된 다단계 추론 그래프가 순차적으로 실행됩니다.
+- **하이브리드 아키텍처**: 실시간 영상 수집(PyAV)은 고성능 스레딩 방식을 사용하고, 복잡한 분석 및 추론 로직은 **LangGraph**를 통해 모델링합니다.
+- **패킷 기반 하이브리드 파이프라인**: 
+    - **분석 경로**: 비디오 패킷을 디코딩하여 VLM 분석에 사용.
+    - **저장 경로**: 원본 패킷을 메모리(PacketBuffer)에 30초간 저장하여 이벤트 발생 시 즉시 클립 생성.
+- **키프레임 보정 및 Remuxing**: 영상 추출 시 시작점을 **I-Frame**으로 자동 보정(Back-tracking)하고, 재인코딩 없이 MP4로 변환하여 CPU 부하를 최소화하고 원본 화질을 유지합니다.
+- **3단계 백엔드 보고 체계**: 
+    1. **이벤트 생성 보고**: 이상 감지 시 즉시 보고 및 `event_id` 발급.
+    2. **영상 클립 업데이트**: S3 업로드 완료 후 클립 경로(`clipUrl`) 전송.
+    3. **정밀 분석 최종 보고**: LangGraph 분석 종료 후 상세 결과 전송.
 - **Redis 동적 스트림 관리**: 에이전트 재시작 없이 **스프링부트 백엔드**가 Redis 설정을 변경하여 분석 대상 카메라를 실시간으로 제어합니다.
 - **FastAPI 기반 에이전트**: 에이전트 자체가 FastAPI 서버로 실행되어, 외부에서 상태를 모니터링하고 관리할 수 있습니다.
 
@@ -44,12 +51,15 @@ src/
 │   ├── __init__.py
 │   ├── vlm_client.py       # VLM API 클라이언트
 │   ├── precision_client.py # Precision LLM 클라이언트
-│   ├── backend_client.py   # Backend API 클라이언트
+│   ├── backend_client.py   # Backend API 클라이언트 (생성/클립/갱신)
+│   ├── storage_client.py   # S3 / MinIO 저장소 클라이언트
 │   └── vector_store_client.py # Vector Store 클라이언트
 ├── core/
 │   ├── __init__.py
-│   ├── producer.py         # 프레임 프로듀서 (RTSP → 프레임)
-│   ├── consumer.py         # 컨슈머 풀 (LangGraph 실행)
+│   ├── producer.py         # 패킷 수집 및 하이브리드 처리 (PyAV)
+│   ├── packet_buffer.py    # 30초 패킷 버퍼링 및 키프레임 보정
+│   ├── muxer.py            # 재인코딩 없는 MP4 Muxing 유틸리티
+│   ├── consumer.py         # 분석 및 클립 생성 오케스트레이션
 │   ├── queue_manager.py    # 프레임 큐 관리
 │   ├── windowing.py        # 윈도우 매니저
 │   └── redis_manager.py    # Redis 연동 (카메라 목록 동기화)
@@ -84,12 +94,12 @@ src/
 
 이 에이전트는 여러 컴포넌트가 협력하여 동작하며, 각 컴포넌트는 다음과 같은 역할을 수행합니다.
 
-- **`Producer` (수집가)**: RTSP 카메라 영상을 쉬지 않고 바라보며, 프레임(사진)을 하나씩 캡처하는 역할.
-- **`WindowManager` (정리 전문가)**: 수집가가 가져온 낱장의 사진들을 의미 있는 단위(예: 8초 분량의 영상 클립)로 묶어주는 역할.
-- **`QueueManager` (작업 대기열)**: 정리된 영상 클립들을 분석가에게 전달하기 전, 순서대로 쌓아두는 컨베이어 벨트.
-- **`Consumer` & `LangGraph` (분석가 팀)**: 컨베이어 벨트에서 영상 클립을 하나씩 가져와, LangGraph라는 정해진 시나리오(VLM 분석 -> 이상하면 정밀 분석)에 따라 분석을 수행하는 핵심 두뇌.
-- **`RedisManager` (관제탑)**: "이제부터 1번, 3번 카메라를 감시해!" 와 같이 외부(백엔드)의 지시를 받아, 어떤 수집가(`Producer`)를 일하게 할지 동적으로 관리.
-- **`Clients` (통신 담당)**: VLM, LLM, 백엔드 등 외부 전문가(서버)에게 "이 영상 분석해주세요"라고 요청하고 답변을 받아오는 역할.
+- **`Producer` (수집가)**: RTSP 스트림을 **PyAV 패킷 단위**로 수집합니다. 분석용 프레임은 디코딩하여 전달하고, 원본 패킷은 버퍼에 저장합니다.
+- **`PacketBuffer` (저장소)**: 최근 30초간의 원본 패킷을 보관하며, 이상 상황 발생 시 **가장 가까운 키프레임**을 찾아 시작점을 보정합니다.
+- **`Muxer` (포장공)**: 잘라낸 패킷들을 재인코딩 없이 MP4 컨테이너로 합쳐 신속하게 증거 영상을 만듭니다.
+- **`Consumer` (중재자)**: VLM 분석 결과가 '이상'일 때, 백엔드 보고와 영상 업로드를 지휘하고 LangGraph를 실행합니다.
+- **`StorageClient` (배달원)**: 생성된 MP4 파일을 S3의 `/clips/temp` 경로에 업로드하고 백엔드에 배송 완료(URL 업데이트) 알림을 보냅니다.
+- **`RedisManager` (관제탑)**: 백엔드의 지시를 받아 어떤 카메라의 프로듀서를 가동할지 실시간으로 관리합니다.
 
 ---
 
@@ -174,28 +184,28 @@ mock_mode: bool = True  # True: Mock 서버, False: 실제 서버
 ```python
 _real_vlm_endpoint: str = "http://<VLM 서버>:8001/analyze"
 _real_precision_endpoint: str = "http://<LLM 서버>:8002/precision_analyze"
-_real_backend_create_endpoint: str = "http://<백엔드>:8080/api/vlm-results"
-_real_backend_update_endpoint: str = "http://<백엔드>:8080/api/vlm-results/{event_id}"
+_real_backend_create_endpoint: str = "http://<백엔드>:8080/internal/agent/events"
+_real_backend_clip_endpoint: str = "http://<백엔드>:8080/internal/agent/events/{event_id}/clip"
+_real_backend_update_endpoint: str = "http://<백엔드>:8080/internal/agent/events/{event_id}/analysis"
 ```
 
-### Mock 서버 포트
-
-| 서버 | 포트 |
-|------|------|
-| VLM | 8001 |
-| Precision LLM | 8002 |
-| Backend | 8088 |
-
-### RTSP 설정
+### RTSP 및 비디오 설정
 
 | 설정 | 기본값 | 설명 |
 |------|--------|------|
 | `rtsp_host` | `127.0.0.1` | MediaMTX 호스트 |
 | `rtsp_port` | `8554` | RTSP 포트 |
-| `frame_width` | `640` | 프레임 너비 |
-| `frame_height` | `360` | 프레임 높이 |
-| `jpeg_quality` | `60` | JPEG 품질 |
-| `fps` | `1` | 초당 프레임 수 |
+| `fps` | `1` | VLM 분석용 프레임 추출 속도 |
+| `video_buffer_seconds` | `30` | 메모리에 유지할 패킷 시간 (초) |
+
+### S3 저장소 설정
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| `s3_endpoint` | `http://localhost:9000` | S3 또는 MinIO 엔드포인트 |
+| `s3_bucket` | `clips` | 영상 클립 저장 버킷명 |
+| `clip_temp_path` | `/temp` | 버킷 내 임시 저장 경로 |
+| `s3_secure` | `False` | SSL 사용 여부 |
 
 ### 분석 파이프라인 설정
 

@@ -147,9 +147,10 @@ class ConsumerPool:
                     self.total_processed += 1
                     self.total_normal += 1
                 else:
-                    worker_logger.info(f"[{camera_id}] 이상 징후 감지 ({risk_level}): 백엔드 보고 후 LangGraph 실행")
+                    worker_logger.info(f"[{camera_id}] 이상 징후 감지 ({risk_level}): 백엔드 보고 후 영상 클립 생성")
                     
-                    # 2-1. 백엔드에 1차 결과 즉시 보고
+                    # [Step 1: 백엔드 이벤트 생성]
+                    # 1차 VLM 결과를 즉시 전송하여 'Event ID'를 선제적으로 확보합니다.
                     event_id = None
                     try:
                         event_type = vlm_result.get("event_type", "")
@@ -163,14 +164,14 @@ class ConsumerPool:
                         worker_logger.error(f"[{camera_id}] 백엔드 전송 중 오류: {e}")
 
                     if not event_id:
-                        worker_logger.error(f"[{camera_id}] Event ID 생성 실패로 LangGraph 실행을 중단합니다.")
+                        worker_logger.error(f"[{camera_id}] Event ID 생성 실패로 클립 생성을 중단합니다.")
                         self.total_failed += 1
                         continue
 
-                    # 2-2. [신규] 영상 클립 생성 및 업로드 (PyAV 패킷 기반)
+                    # [Step 2: 영상 클립 처리 파이프라인]
                     try:
-                        # 윈도우의 시작과 끝 시간을 기준으로 패킷 추출
-                        # start_ts는 윈도우 시작 프레임의 시간
+                        # 2-1) PacketBuffer에서 해당 시점의 패킷들 추출
+                        # VLM이 분석한 윈도우의 타임스탬프를 기준으로 패킷을 가져옵니다.
                         start_ts = frame_timestamps[0].timestamp() if frame_timestamps else time.time() - 10
                         end_ts = frame_timestamps[-1].timestamp() if frame_timestamps else time.time()
                         
@@ -178,16 +179,14 @@ class ConsumerPool:
                         source_stream = self.source_streams.get(camera_id)
                         
                         if buffer and source_stream:
-                            # 1) 패킷 추출 (Keyframe Back-tracking 포함)
+                            # 2-2) Muxing: 패킷을 MP4 파일로 변환 (Keyframe 보정 포함)
                             packets = buffer.get_packets(start_ts, end_ts)
-                            
-                            # 2) Muxing (MP4 생성)
                             mp4_file = mux_packets_to_mp4(packets, source_stream)
                             
-                            # 3) MinIO 업로드
+                            # 2-3) S3 업로드: 생성된 MP4를 저장소에 저장
                             clip_url = self.storage_client.upload_clip(mp4_file, event_id)
                             
-                            # 4) 백엔드 알림
+                            # 2-4) 백엔드 알림: 업로드된 경로를 백엔드 이벤트 정보에 업데이트
                             if clip_url:
                                 self.backend_client.update_event_clip(event_id, clip_url)
                         else:
@@ -196,7 +195,8 @@ class ConsumerPool:
                     except Exception as e:
                         worker_logger.error(f"[{camera_id}] 클립 생성/업로드 중 오류: {e}", exc_info=True)
 
-                    # 2-3. 초기 상태 구성 (Event ID 포함)
+                    # [Step 3: 정밀 분석 (LangGraph) 실행]
+                    # 1차 분석 완료 후, 생성된 Event ID를 포함하여 LangGraph를 호출합니다.
                     initial_state = {
                         "camera_id": camera_id,
                         "camera_name": camera_info.get("name", "unknown"),

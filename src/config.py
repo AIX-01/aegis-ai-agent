@@ -25,6 +25,8 @@ class Config:
     _real_backend_create_endpoint: str = "http://localhost:8080/internal/agent/events"
     # 2차 정밀 분석이 끝난 후 또는 '의심' 상태를 최종 기록할 때, 기존 이벤트의 내용을 갱신(UPDATE)하기 위해 사용
     _real_backend_update_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/analysis"
+    # 생성된 영상 클립의 경로를 백엔드에 업데이트(CLIP UPDATE)하기 위해 사용
+    _real_backend_clip_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/clip"
 
     # ===================================================================
     # >> 2. 모드 설정 (이 값만 True/False로 변경하여 모드를 전환하세요)
@@ -38,14 +40,16 @@ class Config:
     real_vlm: bool = False
     real_precision: bool = False
     real_backend: bool = False
+    real_s3: bool = False # S3 실제 서버 사용 여부 추가
 
     # ===================================================================
     # >> 3. 활성 엔드포인트 (수정 금지 - __post_init__에서 자동 설정됨)
     # ===================================================================
     vlm_endpoint: str = field(init=False)
     precision_endpoint: str = field(init=False)
-    backend_create_endpoint: str = field(init=False) # 분리됨
-    backend_update_endpoint: str = field(init=False) # 분리됨
+    backend_create_endpoint: str = field(init=False)
+    backend_update_endpoint: str = field(init=False)
+    backend_clip_endpoint: str = field(init=False) # 추가됨
 
     # =========================================
     # 에이전트 API 서버 설정 (FastAPI)
@@ -69,17 +73,19 @@ class Config:
     frame_height: int = 360
     jpeg_quality: int = 60
     fps: int = 1
-    video_buffer_seconds: int = 30  # 30초 분량 패킷 버퍼링
+    # 비디오 패킷 버퍼링 시간 (초): 이상 행동 감지 시 추출할 영상의 최대 길이를 결정합니다。
+    video_buffer_seconds: int = 30
 
     # =========================================
-    # MinIO / S3 설정
+    # S3 저장소 설정 (AWS S3 및 MinIO 호환)
     # =========================================
-    minio_endpoint: str = "http://localhost:9000"
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "minioadmin"
-    minio_bucket: str = "aegis-clips"
-    minio_secure: bool = False
-    clip_temp_path: str = "/clips/temp"
+    s3_endpoint: str = "http://localhost:9000" # MinIO 사용 시 필수, AWS S3 사용 시 빈 문자열 또는 실제 주소
+    s3_access_key: str = "aegis"
+    s3_secret_key: str = "trillion"
+    s3_bucket: str = "clips"
+    s3_secure: bool = False # HTTPS 사용 여부
+    clip_temp_path: str = "/temp" # 버킷 내에서 영상이 임시로 저장될 경로
+
 
     # =========================================
     # 분석 파이프라인 설정
@@ -138,17 +144,14 @@ class Config:
         else:
             self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
 
-        # 백엔드 엔드포인트 설정 (생성/갱신 분리)
+        # 백엔드 엔드포인트 설정 (생성/갱신/클립 분리)
         if self.real_backend:
             self.backend_create_endpoint = self._real_backend_create_endpoint
             self.backend_update_endpoint = self._real_backend_update_endpoint
+            self.backend_clip_endpoint = self._real_backend_clip_endpoint
         else:
             # Mock 서버는 RESTful 규칙을 따르므로 기본 경로 설정
             base_url = f"http://localhost:{self.mock_backend_port}/api/vlm-results"
             self.backend_create_endpoint = base_url
-            self.backend_update_endpoint = f"{base_url}/{{event_id}}"
-
-# =========================================
-# 분석 트리거 상수
-# =========================================
-TRIGGER_CATEGORIES = ['abnormal', '이상']
+            self.backend_update_endpoint = f"{base_url}/{{event_id}}/analysis"
+            self.backend_clip_endpoint = f"{base_url}/{{event_id}}/clip"

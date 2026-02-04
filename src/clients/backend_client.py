@@ -26,6 +26,7 @@ class BackendClient:
         # 엔드포인트 분리
         self.create_endpoint = config.backend_create_endpoint
         self.update_endpoint_template = config.backend_update_endpoint
+        self.clip_endpoint_template = config.backend_clip_endpoint # 추가됨
         
         self.timeout = config.backend_timeout
         self.max_retries = config.backend_max_retries
@@ -158,10 +159,8 @@ class BackendClient:
         Returns:
             성공 여부
         """
-        # 엔드포인트 구성 (기본 API 구조 기반)
-        # 예: http://localhost:8080/internal/agent/events/{event_id}/clip
-        base_endpoint = self.create_endpoint.rstrip("/")
-        endpoint = f"{base_endpoint}/{event_id}/clip"
+        # 템플릿에 event_id 적용
+        endpoint = self.clip_endpoint_template.format(event_id=event_id)
         
         payload = {
             "clipUrl": clip_url
