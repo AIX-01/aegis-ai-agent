@@ -47,6 +47,7 @@ def build_graph(config: Config):
     # 노드에 클라이언트 바인딩
     precision_analysis = functools.partial(precision_analysis_node, precision_client=precision_client)
     update_backend = functools.partial(update_backend_node, backend_client=backend_client)
+    generate_report = functools.partial(generate_report_node, backend_client=backend_client)
 
     # 그래프 빌더
     workflow = StateGraph(AnalysisState)
@@ -56,7 +57,7 @@ def build_graph(config: Config):
     workflow.add_node("precision_analysis", precision_analysis)
     workflow.add_node("action", action_node)
     workflow.add_node("update_backend", update_backend)
-    workflow.add_node("generate_report", generate_report_node)
+    workflow.add_node("generate_report", generate_report)
 
     # 그래프 진입점 설정: 상태에 따라 바로 분기 (Conditional Entry Point)
     workflow.set_conditional_entry_point(
