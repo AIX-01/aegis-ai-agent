@@ -140,12 +140,11 @@ class Config:
     redis_update_channel: str = "camera:analysis:update"
 
     # =========================================
-    # Qdrant 설정 (벡터 데이터베이스)
+    # Qdrant 및 임베딩 설정
     # =========================================
-    qdrant_host: str = field(default_factory=lambda: get_env("QDRANT_HOST", "aegis-qdrant"))
-    qdrant_port: int = field(default_factory=lambda: get_env_int("QDRANT_PORT", 6333))
-    qdrant_enabled: bool = field(default_factory=lambda: get_env_bool("QDRANT_ENABLED", True))
-    embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    qdrant_url: str = field(default_factory=lambda: get_env("QDRANT_URL", "http://localhost:6333"))
+    qdrant_api_key: Optional[str] = field(default_factory=lambda: get_env("QDRANT_API_KEY", None))
+    embedding_model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"
 
     # =========================================
     # 로깅 설정
