@@ -52,6 +52,7 @@ def precision_analysis_node(state: AnalysisState, precision_client: PrecisionCli
             
             logger.info(f"[{camera_id}] 정밀 분석 완료: {new_risk_level} - {new_event_type} (Score: {new_risk_score:.2f})")
             
+            # 최종 결과를 상태 딕셔너리로 반환
             return {
                 "precision_result": result,     # LLM 원본 결과 저장
                 "risk_level": new_risk_level,   # 최종 risk_level 갱신

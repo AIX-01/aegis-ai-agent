@@ -15,7 +15,9 @@ class Config:
     # ===================================================================
     # >> 1. 실제 서버 주소 설정 (이 부분을 실제 운영 서버에 맞게 수정하세요)
     # ===================================================================
-    _real_vlm_endpoint: str = "http://<실제 VLM 서버 IP>:8001/analyze"
+    _real_vlm_endpoint: str = "https://zo7s6f4133wx6k-8000.proxy.runpod.net/v1"
+    _real_vlm_api_key: str = "sk-IrR7Bwxtin0haWagUnPrBgq5PurnUz86"
+    _real_vlm_model_id: str = "AIX-01/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit-3000steps-r64-b8-merged-16bit"
     _real_precision_endpoint: str = "http://<실제 LLM 서버 IP>:8002/precision_analyze"
     
     # 백엔드 엔드포인트 분리 (생성용 / 갱신용)
@@ -25,6 +27,8 @@ class Config:
     _real_backend_create_endpoint: str = "http://localhost:8080/internal/agent/events"
     # 2차 정밀 분석이 끝난 후 또는 '의심' 상태를 최종 기록할 때, 기존 이벤트의 내용을 갱신(UPDATE)하기 위해 사용
     _real_backend_update_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/analysis"
+    # 생성된 영상 클립의 경로를 백엔드에 업데이트(CLIP UPDATE)하기 위해 사용
+    _real_backend_clip_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/clip"
 
     # ===================================================================
     # >> 2. 모드 설정 (이 값만 True/False로 변경하여 모드를 전환하세요)
@@ -38,14 +42,18 @@ class Config:
     real_vlm: bool = False
     real_precision: bool = False
     real_backend: bool = False
+    real_s3: bool = False # S3 실제 서버 사용 여부 추가
 
     # ===================================================================
     # >> 3. 활성 엔드포인트 (수정 금지 - __post_init__에서 자동 설정됨)
     # ===================================================================
     vlm_endpoint: str = field(init=False)
+    vlm_api_key: Optional[str] = field(init=False, default=None)
+    vlm_model_id: str = field(init=False, default="vlm")
     precision_endpoint: str = field(init=False)
-    backend_create_endpoint: str = field(init=False) # 분리됨
-    backend_update_endpoint: str = field(init=False) # 분리됨
+    backend_create_endpoint: str = field(init=False)
+    backend_update_endpoint: str = field(init=False)
+    backend_clip_endpoint: str = field(init=False) # 추가됨
 
     # =========================================
     # 에이전트 API 서버 설정 (FastAPI)
@@ -69,6 +77,10 @@ class Config:
     frame_height: int = 360
     jpeg_quality: int = 60
     fps: int = 1
+    # 비디오 패킷 버퍼링 시간 (초): 이상 행동 감지 시 추출할 영상의 최대 길이를 결정합니다
+    video_buffer_seconds: int = 30
+
+
 
     # =========================================
     # 분석 파이프라인 설정
@@ -118,8 +130,12 @@ class Config:
         # VLM 엔드포인트 설정
         if self.real_vlm:
             self.vlm_endpoint = self._real_vlm_endpoint
+            self.vlm_api_key = self._real_vlm_api_key
+            self.vlm_model_id = getattr(self, "_real_vlm_model_id", "vlm")
         else:
             self.vlm_endpoint = f"http://localhost:{self.mock_vlm_port}/analyze"
+            self.vlm_api_key = "mock-key"
+            self.vlm_model_id = "mock-vlm"
 
         # 정밀 분석 엔드포인트 설정
         if self.real_precision:
@@ -127,17 +143,14 @@ class Config:
         else:
             self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
 
-        # 백엔드 엔드포인트 설정 (생성/갱신 분리)
+        # 백엔드 엔드포인트 설정 (생성/갱신/클립 분리)
         if self.real_backend:
             self.backend_create_endpoint = self._real_backend_create_endpoint
             self.backend_update_endpoint = self._real_backend_update_endpoint
+            self.backend_clip_endpoint = self._real_backend_clip_endpoint
         else:
             # Mock 서버는 RESTful 규칙을 따르므로 기본 경로 설정
             base_url = f"http://localhost:{self.mock_backend_port}/api/vlm-results"
             self.backend_create_endpoint = base_url
-            self.backend_update_endpoint = f"{base_url}/{{event_id}}"
-
-# =========================================
-# 분석 트리거 상수
-# =========================================
-TRIGGER_CATEGORIES = ['abnormal', '이상']
+            self.backend_update_endpoint = f"{base_url}/{{event_id}}/analysis"
+            self.backend_clip_endpoint = f"{base_url}/{{event_id}}/clip"

@@ -31,6 +31,7 @@ redis==7.1.0
 requests==2.32.5
 requests-toolbelt==1.0.0
 six==1.17.0
+openai
 starlette==0.50.0
 tenacity==9.1.2
 typing-inspection==0.4.2
@@ -40,3 +41,4 @@ uuid_utils==0.14.0
 uvicorn==0.40.0
 xxhash==3.6.0
 zstandard==0.25.0
+av==16.1.0
