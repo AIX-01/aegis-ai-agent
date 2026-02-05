@@ -25,21 +25,25 @@ AEGIS AI Agent는 RTSP 스트림을 실시간으로 수신하여 VLM(Vision Lang
 
 ```
 src/
+├── __init__.py
 ├── app.py                      # 메인 진입점 (FastAPI 앱 + AegisAgent 오케스트레이터)
 ├── config.py                   # Config 데이터클래스 (전체 설정 관리)
 ├── utils.py                    # 유틸리티 (로깅, 시그널 핸들러, 지수 백오프)
 │
 ├── api/
-│   ├── api_server.py           # 독립 실행용 FastAPI 서버 (미사용, app.py에 통합됨)
+│   ├── __init__.py
+│   ├── api_server.py           # 독립 실행용 FastAPI 서버 (미사용 - app.py에 통합됨)
 │   └── mock_server.py          # Mock 서버 (VLM, Precision, Backend)
 │
 ├── clients/
+│   ├── __init__.py
 │   ├── backend_client.py       # 백엔드 API 클라이언트 (이벤트 CRUD, 클립 업로드)
 │   ├── precision_client.py     # 정밀 분석 LLM 클라이언트
 │   ├── vlm_client.py           # VLM 분석 클라이언트
 │   └── vector_store_client.py  # Vector DB 클라이언트 (미구현)
 │
 ├── core/
+│   ├── __init__.py
 │   ├── producer.py             # RTSP 패킷 수신 스레드 (PyAV 기반)
 │   ├── packet_buffer.py        # 30초 원형 패킷 버퍼 (키프레임 백트래킹)
 │   ├── muxer.py                # MP4 Muxing (faststart, edts 제거, 해상도 패치)
@@ -49,22 +53,27 @@ src/
 │   └── redis_manager.py        # Redis Pub/Sub 기반 카메라 동기화
 │
 ├── graph/
+│   ├── __init__.py
 │   ├── analysis_graph.py       # LangGraph 워크플로우 빌더
 │   ├── state.py                # AnalysisState TypedDict 정의
 │   ├── nodes/
+│   │   ├── __init__.py
 │   │   ├── verification.py     # 검증 노드 (미구현 - 임시 ABNORMAL 반환)
 │   │   ├── precision_analysis.py # 정밀 분석 LLM 호출
 │   │   ├── update_backend.py   # 백엔드 이벤트 갱신
 │   │   ├── action.py           # 대응 조치 결정 (미구현)
 │   │   └── generate_report.py  # 보고서 생성 (미구현)
 │   └── edges/
+│       ├── __init__.py
 │       └── routers.py          # 조건부 분기 (analysis_router, verification_router)
 │
 ├── retrieval/                  # RAG 모듈 (미구현)
+│   ├── __init__.py
 │   ├── indexer.py              # 문서 인덱싱 (미구현)
 │   └── retriever_factory.py    # Retriever 팩토리 (미구현)
 │
 └── tools/                      # 분석 도구 (미구현)
+    ├── __init__.py
     └── search_tools.py         # 매뉴얼/사례 검색 (미구현)
 ```
 
@@ -74,7 +83,7 @@ src/
 
 ### app.py - AegisAgent
 
-메인 오케스트레이터 클래스입니다.
+메인 오케스트레이터 클래스입니다. FastAPI 앱의 lifespan 컨텍스트에서 초기화됩니다.
 
 **주요 속성:**
 - `queue_manager`: 분석 작업 큐
@@ -98,12 +107,20 @@ src/
 
 모든 설정을 관리하는 데이터클래스입니다.
 
+**모드 설정:**
+
 | 설정 | 기본값 | 설명 |
 |------|--------|------|
 | `mock_mode` | `True` | Mock 서버 사용 여부 |
 | `real_vlm` | `False` | 실제 VLM 서버 사용 |
 | `real_precision` | `False` | 실제 정밀 분석 서버 사용 |
 | `real_backend` | `False` | 실제 백엔드 서버 사용 |
+| `real_s3` | `False` | 실제 S3 서버 사용 |
+
+**RTSP/프레임 설정:**
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
 | `rtsp_host` | `127.0.0.1` | RTSP 서버 호스트 |
 | `rtsp_port` | `8554` | RTSP 서버 포트 |
 | `frame_width` | `640` | 분석용 이미지 너비 |
@@ -111,11 +128,22 @@ src/
 | `jpeg_quality` | `60` | JPEG 품질 |
 | `fps` | `1` | 분석 FPS |
 | `video_buffer_seconds` | `30` | 패킷 버퍼 시간 |
+
+**분석 파이프라인 설정:**
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
 | `num_workers` | `4` | 워커 스레드 수 |
 | `window_size` | `8` | 윈도우 프레임 수 |
 | `window_slide` | `4` | 윈도우 슬라이드 간격 |
 | `flush_timeout` | `30` | 타임아웃 강제 처리 |
+| `min_flush_size` | `5` | 강제 처리 최소 프레임 |
 | `queue_max_size` | `20` | 큐 최대 크기 |
+
+**네트워크 설정:**
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
 | `vlm_timeout` | `30` | VLM 타임아웃 |
 | `precision_timeout` | `60` | 정밀 분석 타임아웃 |
 | `backend_timeout` | `10` | 백엔드 타임아웃 |
@@ -289,6 +317,7 @@ LangGraph 파이프라인의 상태 정의입니다.
 | risk_score | float | 위험도 점수 |
 | report | str | 최종 보고서 (미구현) |
 | actions | list | 대응 조치 (미구현) |
+| rag_references | list | RAG 참조 (미구현) |
 | errors | List[str] | 오류 목록 |
 
 ---
@@ -524,43 +553,43 @@ graph TD
 
 | 파일 | 함수/클래스 | 현재 동작 |
 |------|-------------|----------|
-| retrieval/retriever_factory.py | create_retriever() | None 반환 + 경고 로그 |
-| retrieval/indexer.py | index_document() | 경고 로그만 출력 |
-| tools/search_tools.py | search_manual() | 하드코딩 문자열 반환 |
-| tools/search_tools.py | search_past_cases() | 하드코딩 문자열 반환 |
-| clients/vector_store_client.py | VectorStoreClient | pass (빈 클래스) |
-| graph/nodes/verification.py | verification_node() | 무조건 ABNORMAL 반환 |
-| graph/nodes/action.py | action_node() | 빈 리스트 반환 |
-| graph/nodes/generate_report.py | generate_report_node() | "Not Implemented" 반환 |
+| `retrieval/retriever_factory.py` | `create_retriever()` | None 반환 + 경고 로그 |
+| `retrieval/indexer.py` | `index_document()` | 경고 로그만 출력 |
+| `tools/search_tools.py` | `search_manual()` | 하드코딩 문자열 반환 |
+| `tools/search_tools.py` | `search_past_cases()` | 하드코딩 문자열 반환 |
+| `clients/vector_store_client.py` | `VectorStoreClient` | pass (빈 클래스) |
+| `graph/nodes/verification.py` | `verification_node()` | 무조건 ABNORMAL 반환 (검증 로직 미정) |
+| `graph/nodes/action.py` | `action_node()` | 빈 리스트 반환 |
+| `graph/nodes/generate_report.py` | `generate_report_node()` | "Not Implemented" 반환 |
 
 ### 고아 코드
 
 | 파일 | 설명 |
 |------|------|
-| api/api_server.py | app.py에 FastAPI 통합됨. AegisAPIServer 클래스 미사용 |
+| `api/api_server.py` | app.py에 FastAPI 통합됨. AegisAPIServer 클래스 미사용. `run()` 메서드에서 `self.agent.run()` 호출하나 AegisAgent에는 해당 메서드 없음. |
 
 ### 논리적 불일치
 
-| 파일:라인 | 문제 |
-|-----------|------|
-| config.py:19-20 | 실제 서버 엔드포인트 플레이스홀더 하드코딩 |
-| graph/state.py:8 | EventType에 "UNKNOWN" 미정의 |
-| api/mock_server.py:180 | Mock은 PUT, backend_client는 PATCH 사용 |
+| 파일 | 문제 | 상세 |
+|------|------|------|
+| `config.py:19-20` | 실제 서버 엔드포인트 플레이스홀더 | `_real_vlm_endpoint`, `_real_precision_endpoint`에 `<실제 IP>` 형태로 하드코딩 |
+| `graph/state.py:8` | EventType에 "UNKNOWN" 미정의 | precision_analysis_node에서 UNKNOWN 사용하나 Literal에 정의 없음 |
+| `api/mock_server.py:180` | HTTP 메서드 불일치 | MockBackendServer는 PUT, backend_client.update_event()는 PATCH 사용 |
 
 ### 비효율적 코드
 
-| 파일 | 문제 | 권장 조치 |
-|------|------|----------|
-| core/producer.py:196-217 | 모든 패킷 디코딩 후 대부분 버림 | 선택적 디코딩 |
-| core/windowing.py:70-92 | 0.1초마다 전체 카메라 버퍼 순회 | 이벤트 기반 처리 |
+| 파일 | 문제 | 상세 | 권장 조치 |
+|------|------|------|----------|
+| `core/producer.py:196-217` | 모든 패킷 디코딩 | 1fps 분석에도 모든 패킷을 디코딩 후 대부분 버림 | 선택적 디코딩 또는 코덱 컨텍스트 유지 |
+| `core/windowing.py:70-92` | 폴링 기반 윈도우 생성 | 0.1초마다 전체 카메라 버퍼 순회 | 이벤트 기반 처리로 변경 |
 
 ### 보안 이슈
 
-| 파일 | 문제 | 심각도 |
-|------|------|--------|
-| config.py:19-25 | 서버 IP 하드코딩 가능 | 🟡 중간 |
-| clients/backend_client.py | HTTP 사용 (내부망 가정) | 🟢 낮음 |
-| api/mock_server.py | 0.0.0.0 바인딩 | 🟢 낮음 |
+| 파일 | 문제 | 심각도 | 권장 조치 |
+|------|------|--------|----------|
+| `config.py:19-25` | 서버 IP 하드코딩 가능 | 🟡 중간 | 환경 변수로 분리 |
+| `clients/backend_client.py` | HTTP 사용 (내부망 가정) | 🟢 낮음 | 내부망 외 사용 시 HTTPS 적용 |
+| `api/mock_server.py` | 0.0.0.0 바인딩 | 🟢 낮음 | 개발 환경 한정 사용 |
 
 ### 기타
 
