@@ -547,7 +547,7 @@ graph TD
 
 ## 🐛 Known Issues
 
-> 최종 감사일: 2026-02-04
+> 최종 감사일: 2026-02-05
 
 ### 미구현 코드 (TBD / Placeholder)
 
