@@ -133,20 +133,25 @@ class VLMClient:
                             # 값에서 공백 및 꺽쇠 괄호(< >) 제거
                             val = parts[1].strip().lower().strip('<>')
                             result[key] = val
-                
+
                 # class1이 없을 경우 키워드 검색으로 보완
                 if "class1" not in result:
                     if "normal" in raw_text.lower(): result["class1"] = "normal"
                     elif "abnormal" in raw_text.lower(): result["class1"] = "abnormal"
                     elif "suspicious" in raw_text.lower(): result["class1"] = "suspicious"
 
+                # class2가 없을 경우 키워드 검색으로 보완
+                if "class2" not in result:
+                    if "assault" in raw_text.lower(): result["class2"] = "assault"
+                    elif "dump" in raw_text.lower(): result["class2"] = "dump"
+                    elif "burglary" in raw_text.lower(): result["class2"] = "burglary"
+                    elif "swoon" in raw_text.lower(): result["class2"] = "swoon"
+                    elif "vandalism" in raw_text.lower(): result["class2"] = "vandalism"
+
                 # 4. 상세 로그 출력 제어 (정상일 때는 결과만, 이상 상황일 때만 원문 출력)
                 if result.get("class1") == "normal":
                     # 사용자 요청: NORMAL 상황에서는 결과 메시지만 깔끔하게 출력
                     self.logger.info(f"[{camera_id}] {window_range} VLM 분석 결과: NORMAL입니다. (소요: {duration:.2f}초)")
-                    result["class1"] = "normal"
-                    result["class2"] = "none"
-                    result["risk_level"] = "NORMAL"
                 else:
                     # 이상/의심 상황에서는 원본 응답을 포함하여 상세 정보 출력
                     self.logger.info(f"[{camera_id}] {window_range} VLM 분석 완료, 소요 시간: {duration:.2f}초")
