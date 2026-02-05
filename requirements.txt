@@ -33,6 +33,7 @@ requests==2.32.5
 requests-toolbelt==1.0.0
 sentence-transformers==3.3.1
 six==1.17.0
+openai
 starlette==0.50.0
 tenacity==9.1.2
 torch==2.5.1
@@ -44,3 +45,4 @@ uuid_utils==0.14.0
 uvicorn==0.40.0
 xxhash==3.6.0
 zstandard==0.25.0
+av==16.1.0

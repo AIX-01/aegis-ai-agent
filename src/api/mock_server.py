@@ -125,16 +125,24 @@ class MockPrecisionServer:
     def _setup_routes(self):
         @self.app.post("/precision_analyze", response_model=PrecisionAnalysisResponse)
         async def precision_analyze(request: PrecisionAnalysisRequest):
+            # 허용된 공식 이벤트 타입 목록
+            valid_types = ["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]
+            
             vlm_risk_level = request.vlm_result.get("risk_level", "NORMAL")
-            vlm_event_type = request.vlm_result.get("event_type", "ASSAULT")
+            
+            # 클라이언트로부터 받은 타입을 확인하되, 유효하지 않으면 기본값(DUMP) 또는 랜덤 선택합니다.
+            # 이 로직은 Pydantic 검증 오류(500 Error)를 방지하는 핵심 장치입니다.
+            raw_event_type = request.vlm_result.get("event_type", "DUMP").upper()
+            vlm_event_type = raw_event_type if raw_event_type in valid_types else random.choice(valid_types)
 
             if vlm_risk_level.upper() in ["ABNORMAL", "SUSPICIOUS"]:
-                event_type = random.choice(["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"])
+                # 정밀 분석 모의 결과: 무조건 유효한 5종 중 하나를 반환합니다.
+                event_type = random.choice(valid_types)
                 summary = f"모의 정밀 분석 결과: {event_type} 이벤트가 감지되었습니다."
                 risk_score = random.uniform(0.8, 1.0)
                 risk = "ABNORMAL"
             else:
-                # 이 경우는 거의 호출되지 않지만, 안전을 위해 기본값 설정
+                # NORMAL 상황에서도 무조건 유효한 타입 규격을 준수합니다.
                 event_type = vlm_event_type
                 summary = "정상 상황으로 판단되어 정밀 분석을 수행하지 않았습니다."
                 risk_score = random.uniform(0.0, 0.2)

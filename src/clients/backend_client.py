@@ -26,6 +26,7 @@ class BackendClient:
         # 엔드포인트 분리
         self.create_endpoint = config.backend_create_endpoint
         self.update_endpoint_template = config.backend_update_endpoint
+        self.clip_endpoint_template = config.backend_clip_endpoint # 추가됨
         
         self.timeout = config.backend_timeout
         self.max_retries = config.backend_max_retries
@@ -141,6 +142,88 @@ class BackendClient:
 
             except Exception as e:
                 self.logger.warning(f"❌ [백엔드 갱신 실패] Event ID {event_id}: {e}, 시도: {attempt + 1}/{self.max_retries}")
+                if attempt < self.max_retries - 1:
+                    time.sleep(self.retry_delay)
+
+        return False
+
+    def get_clip_upload_url(self, event_id: str) -> Optional[str]:
+        """
+        클립 업로드용 presigned URL 요청
+        GET /internal/agent/events/{event_id}/clip/upload-url
+
+        Returns:
+            presigned PUT URL 또는 None
+        """
+        endpoint = self.clip_endpoint_template.format(event_id=event_id) + "/upload-url"
+
+        try:
+            response = requests.get(endpoint, timeout=self.timeout)
+            response.raise_for_status()
+
+            data = response.json()
+            upload_url = data.get("uploadUrl")
+            self.logger.debug(f"[업로드 URL 획득] Event ID: {event_id}")
+            return upload_url
+
+        except Exception as e:
+            self.logger.error(f"❌ [업로드 URL 요청 실패] {event_id}: {e}")
+            return None
+
+    def upload_clip(self, upload_url: str, file_data: bytes) -> bool:
+        """
+        presigned URL로 클립 직접 업로드 (S3/MinIO)
+
+        Args:
+            upload_url: presigned PUT URL
+            file_data: MP4 바이너리 데이터
+
+        Returns:
+            성공 여부
+        """
+        try:
+            response = requests.put(
+                upload_url,
+                data=file_data,
+                headers={"Content-Type": "video/mp4"},
+                timeout=60  # 업로드는 시간이 더 걸릴 수 있음
+            )
+            response.raise_for_status()
+
+            self.logger.info(f"✅ [클립 업로드 성공] {len(file_data)} bytes")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"❌ [클립 업로드 실패]: {e}")
+            return False
+
+    def confirm_event_clip(self, event_id: str) -> bool:
+        """
+        클립 업로드 완료 확인
+        POST /internal/agent/events/{event_id}/clip/confirm
+
+        Args:
+            event_id: 이벤트 ID
+
+        Returns:
+            성공 여부
+        """
+        endpoint = self.clip_endpoint_template.format(event_id=event_id) + "/confirm"
+
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(
+                    endpoint,
+                    timeout=self.timeout,
+                    headers={"Content-Type": "application/json"},
+                )
+                response.raise_for_status()
+                
+                self.logger.info(f"✅ [클립 확정 성공] Event ID: {event_id}")
+                return True
+
+            except Exception as e:
+                self.logger.warning(f"❌ [클립 확정 실패] {event_id}: {e}, 시도 {attempt + 1}")
                 if attempt < self.max_retries - 1:
                     time.sleep(self.retry_delay)
 
