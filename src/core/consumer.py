@@ -109,9 +109,14 @@ class ConsumerPool:
                         # VLMClient에서 보정한 risk_level이 있으면 사용, 없으면 class1 사용
                         risk_level = vlm_result.get("risk_level") or vlm_result.get("class1", "normal")
                         risk_level = risk_level.upper()
-                        
-                        # 행동 유형 매핑
-                        event_type = vlm_result.get("class2", "none").upper()
+
+                        # VLMClient에서 보정한 event_type이 있으면 사용, 없으면 class2 사용
+                        # event_type과 class2 둘 다 없으면 ValueError 발생 -> except 블록에서 처리 후 다음 작업으로 넘어감
+                        event_type = vlm_result.get("event_type") or vlm_result.get("class2")
+                        if not event_type:
+                            raise ValueError("VLM 응답에 event_type 또는 class2 값이 없습니다.")
+                        event_type = event_type.upper()
+
                     else:
                         worker_logger.warning(f"[{camera_id}] VLM 응답이 비어있어 NORMAL로 간주합니다.")
 
