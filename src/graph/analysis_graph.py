@@ -9,7 +9,7 @@ from .nodes import (
     generate_report_node
 )
 from .edges import analysis_router, verification_router
-from ..clients import VLMClient, PrecisionClient, BackendClient
+from ..clients import VLMClient, PrecisionClient, BackendClient, VerificationClient
 from ..config import Config
 
 def build_graph(config: Config):
@@ -27,8 +27,7 @@ def build_graph(config: Config):
        - NORMAL -> End (종료)
     2. Verification:
        - 검증 결과 ABNORMAL 격상 -> Precision Analysis
-       - 그 외 (NORMAL/SUSPICIOUS 유지) -> 종료
-       - *(구체적 로직 미정 - TBD)*
+       - SUSPICIOUS 유지 -> 종료
     3. Precision Analysis: LLM 기반 상세 분석 수행
     4. Update Backend: 최종 분석 결과로 백엔드 이벤트 갱신
     5. Action: 대응 조치 결정
@@ -41,10 +40,12 @@ def build_graph(config: Config):
         컴파일된 LangGraph 객체
     """
     # 클라이언트 초기화
+    verification_client = VerificationClient(config)
     precision_client = PrecisionClient(config)
     backend_client = BackendClient(config)
 
     # 노드에 클라이언트 바인딩
+    verification = functools.partial(verification_node, verification_client=verification_client)
     precision_analysis = functools.partial(precision_analysis_node, precision_client=precision_client)
     update_backend = functools.partial(update_backend_node, backend_client=backend_client)
 
@@ -52,7 +53,7 @@ def build_graph(config: Config):
     workflow = StateGraph(AnalysisState)
 
     # 노드 추가 (backend_report 제외)
-    workflow.add_node("verification", verification_node)
+    workflow.add_node("verification", verification)
     workflow.add_node("precision_analysis", precision_analysis)
     workflow.add_node("action", action_node)
     workflow.add_node("update_backend", update_backend)

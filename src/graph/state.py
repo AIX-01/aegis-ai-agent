@@ -22,6 +22,7 @@ class AnalysisState(TypedDict):
     window_end: Union[int, str]   # 윈도우 종료 시간 추가
     
     # --- 워크플로우 진행 중 생성 ---
+    verification_result: Dict[str, Any]  # SUSPICIOUS 검증 결과
     precision_result: Dict[str, Any]   # 2차 정밀 분석 원본 결과
     
     # --- 최종 분석 결과 (워크플로우를 거치며 갱신됨) ---
