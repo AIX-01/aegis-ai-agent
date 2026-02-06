@@ -1,78 +1,77 @@
 """
-정밀 분석 API 클라이언트 (OpenAI Chat API 사용)
+Verification 검증 클라이언트 (OpenAI Chat API 사용)
+
+SUSPICIOUS 상태를 ABNORMAL로 격상하거나 SUSPICIOUS를 유지합니다.
 """
 import logging
 import time
 import base64
 import json
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 
 from .openai_client import get_vision_completion
 from ..utils import exponential_backoff
 
 
-class PrecisionClient:
-    """정밀 분석 API 클라이언트 (OpenAI Chat 기반)"""
+class VerificationClient:
+    """Verification 검증 클라이언트 (OpenAI Chat 기반)"""
 
     def __init__(self, config):
         """
-        정밀 분석 클라이언트 초기화
+        검증 클라이언트 초기화
 
         Args:
             config: 시스템 설정
         """
         self.config = config
-        self.logger = logging.getLogger("aegis-agent.precision")
+        self.logger = logging.getLogger("aegis-agent.verification")
 
         # OpenAI 설정
         self.api_key = config.openai_api_key
         self.model = config.openai_chat_model
         self.timeout = config.openai_chat_timeout
-        self.max_retries = config.precision_max_retries
-        self.retry_delay = config.precision_retry_delay
+        self.max_retries = config.verification_max_retries
+        self.retry_delay = config.verification_retry_delay
 
         # 시스템 프롬프트
-        self.system_prompt = config.precision_system_prompt
+        self.system_prompt = config.verification_system_prompt
 
         # 통계
         self.total_requests = 0
         self.total_success = 0
         self.total_failures = 0
-        self.total_tokens_used = 0
 
         self.logger.info(
-            f"PrecisionClient 초기화됨: 모델={self.model}, 타임아웃={self.timeout}초"
+            f"VerificationClient 초기화됨: 모델={self.model}"
         )
 
-    def send_for_analysis(
+    def verify(
         self,
         camera_id: str,
         frames: List[bytes],
-        vlm_metadata: Dict[str, Any],
+        vlm_result: Dict[str, Any],
         task_metadata: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
         """
-        프레임을 정밀 분석 API로 전송
+        SUSPICIOUS 상태를 검증하여 최종 risk_level을 결정합니다.
 
         Args:
             camera_id: 카메라 식별자
             frames: JPEG 프레임 바이트 리스트
-            vlm_metadata: VLM 분석 결과 메타데이터
+            vlm_result: VLM 분석 결과
             task_metadata: 추가 작업 정보
 
         Returns:
-            분석 결과 딕셔너리 또는 실패 시 None
+            검증 결과 딕셔너리 또는 실패 시 None
             {
-                "event_type": str,
-                "summary": str,
-                "risk_score": float
+                "risk_level": "ABNORMAL" | "SUSPICIOUS",
+                "reason": str
             }
         """
         self.total_requests += 1
 
         # 프롬프트 구성
-        prompt = self._build_prompt(camera_id, vlm_metadata, task_metadata)
+        prompt = self._build_prompt(camera_id, vlm_result, task_metadata)
 
         # 프레임을 base64로 인코딩
         images_base64 = [
@@ -101,20 +100,20 @@ class PrecisionClient:
                 if result:
                     self.total_success += 1
                     self.logger.info(
-                        f"[성공] 정밀 분석 완료 - "
-                        f"카메라: {camera_id}, "
-                        f"이벤트: {result.get('event_type', 'N/A')}, "
+                        f"[검증 완료] 카메라: {camera_id}, "
+                        f"결과: {result.get('risk_level')}, "
+                        f"사유: {result.get('reason', 'N/A')}, "
                         f"소요시간: {duration:.2f}초"
                     )
                     return result
                 else:
                     self.logger.warning(
-                        f"정밀 분석 응답 파싱 실패: {raw_response[:200]}..."
+                        f"검증 응답 파싱 실패: {raw_response[:200]}..."
                     )
 
             except Exception as e:
                 self.logger.warning(
-                    f"정밀 분석 요청 실패 - "
+                    f"검증 요청 실패 - "
                     f"카메라: {camera_id}: {e}, "
                     f"시도: {attempt + 1}/{self.max_retries}"
                 )
@@ -125,56 +124,47 @@ class PrecisionClient:
                 self.logger.debug(f"{delay:.1f}초 후 재시도합니다...")
                 time.sleep(delay)
 
-        # 모든 재시도 실패
+        # 모든 재시도 실패 - 안전하게 ABNORMAL로 격상
         self.total_failures += 1
         self.logger.error(
-            f"정밀 분석 최종 실패 - "
-            f"카메라: {camera_id}, "
-            f"재시도 횟수: {self.max_retries}"
+            f"검증 최종 실패 - 카메라: {camera_id}, "
+            f"안전을 위해 ABNORMAL로 격상합니다."
         )
-        return None
+        return {
+            "risk_level": "ABNORMAL",
+            "reason": "검증 실패로 인한 안전 격상"
+        }
 
     def _build_prompt(
         self,
         camera_id: str,
-        vlm_metadata: Dict[str, Any],
+        vlm_result: Dict[str, Any],
         task_metadata: Dict[str, Any]
     ) -> str:
         """
-        분석용 프롬프트를 구성합니다.
-
-        Args:
-            camera_id: 카메라 ID
-            vlm_metadata: VLM 1차 분석 결과
-            task_metadata: 작업 메타데이터
-
-        Returns:
-            완성된 프롬프트 문자열
+        검증용 프롬프트를 구성합니다.
         """
-        vlm_risk = vlm_metadata.get("risk_level", "UNKNOWN")
-        vlm_event = vlm_metadata.get("event_type", "UNKNOWN")
+        vlm_class1 = vlm_result.get("class1", "unknown")
+        vlm_class2 = vlm_result.get("class2", "unknown")
+        vlm_raw = vlm_result.get("raw_output", "N/A")
 
         context = f"""
 ## 입력 정보
 - 카메라 ID: {camera_id}
-- 1차 분석 결과: {vlm_risk} / {vlm_event}
+- 1차 VLM 분석 결과: class1={vlm_class1}, class2={vlm_class2}
 - 발생 시각: {task_metadata.get('occurred_at', 'N/A')}
 - 분석 구간: {task_metadata.get('window_start', 0)} ~ {task_metadata.get('window_end', 0)}
+
+## VLM 원본 응답
+{vlm_raw[:500]}
 """
         return self.system_prompt + context
 
     def _parse_response(self, raw_response: str) -> Optional[Dict[str, Any]]:
         """
         OpenAI 응답에서 JSON을 파싱합니다.
-
-        Args:
-            raw_response: OpenAI 응답 텍스트
-
-        Returns:
-            파싱된 딕셔너리 또는 None
         """
         try:
-            # JSON 블록 추출 시도
             response = raw_response.strip()
 
             # ```json ... ``` 형식 처리
@@ -191,17 +181,16 @@ class PrecisionClient:
             result = json.loads(response)
 
             # 필수 필드 검증
-            event_type = result.get("event_type", "UNKNOWN").upper()
-            summary = result.get("summary", "")
-            risk_score = float(result.get("risk_score", 0.0))
+            risk_level = result.get("risk_level", "ABNORMAL").upper()
+            reason = result.get("reason", "")
 
-            # risk_score 범위 제한
-            risk_score = max(0.0, min(1.0, risk_score))
+            # risk_level 유효성 검사
+            if risk_level not in ["ABNORMAL", "SUSPICIOUS"]:
+                risk_level = "ABNORMAL"  # 안전하게 격상
 
             return {
-                "event_type": event_type,
-                "summary": summary,
-                "risk_score": risk_score
+                "risk_level": risk_level,
+                "reason": reason
             }
 
         except json.JSONDecodeError as e:

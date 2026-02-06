@@ -27,5 +27,5 @@ def verification_router(state: AnalysisState) -> Literal["end", "precision_analy
     if risk_level == "ABNORMAL":
         return "precision_analysis"
     
-    # NORMAL로 하향되었거나, 여전히 SUSPICIOUS인 경우 정밀 분석을 수행하지 않고 종료
+    # SUSPICIOUS 유지인 경우 정밀 분석을 수행하지 않고 종료
     return "end"
