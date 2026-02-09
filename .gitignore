@@ -40,6 +40,12 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Environment variables
+.env
+
+# Claude Code
+.claude/
+
 # Temporary files
 tmp/
 temp/

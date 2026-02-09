@@ -15,14 +15,13 @@ load_dotenv()
 class Config:
     """
     AEGIS AI Agent의 모든 설정을 관리하는 중앙 클래스입니다.
-    실제 서버 주소를 한 번만 설정해두면, mock_mode 값만 변경하여
-    테스트 모드와 실제 운영 모드를 쉽게 전환할 수 있습니다.
+    개별 real_* 플래그로 컴포넌트별 실제/Mock 서버를 전환합니다.
     """
 
     # ===================================================================
     # >> 1. 실제 서버 주소 설정 (이 부분을 실제 운영 서버에 맞게 수정하세요)
     # ===================================================================
-    _real_vlm_endpoint: str = "https://roz6vbfcc1jn82-8000.proxy.runpod.net/v1"
+    _real_vlm_endpoint: str = "https://apsj89ztypyzpr-8000.proxy.runpod.net/v1"
     _real_vlm_api_key: str = "sk-IrR7Bwxtin0haWagUnPrBgq5PurnUz86"
     _real_vlm_model_id: str = "AIX-01/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit-3000steps-r64-b8-merged-16bit"
     # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨
@@ -39,18 +38,14 @@ class Config:
     _real_backend_clip_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/clip"
 
     # ===================================================================
-    # >> 2. 모드 설정 (이 값만 True/False로 변경하여 모드를 전환하세요)
+    # >> 2. 모드 설정 (컴포넌트별 True/False로 전환)
     # ===================================================================
-    # True: 내장된 모의 서버 사용 (로컬 테스트용)
-    # False: 위에 설정한 실제 서버 주소 사용 (운영용)
-    mock_mode: bool = True
-    
     # 개별 컴포넌트의 실제 서버 사용 여부 (기본값: False -> Mock 사용)
-    # app.py에서 CLI 인자에 따라 동적으로 설정됩니다.
+    # - 여기서 True로 설정하면 CLI 플래그 없이도 항상 실제 서버 사용
+    # - CLI 플래그(--real-vlm 등)는 False → True 전환만 가능 (True → False 불가)
     real_vlm: bool = False
     real_precision: bool = False
     real_backend: bool = False
-    real_s3: bool = False # S3 실제 서버 사용 여부 추가
 
     # ===================================================================
     # >> 3. 활성 엔드포인트 (수정 금지 - __post_init__에서 자동 설정됨)
@@ -70,7 +65,7 @@ class Config:
     agent_api_port: int = 8000
 
     # =========================================
-    # 모의 서버 포트 설정 (mock_mode=True일 때 사용)
+    # 모의 서버 포트 설정 (real_*=False인 컴포넌트에 사용)
     # =========================================
     mock_vlm_port: int = 8001
     mock_precision_port: int = 8002
@@ -95,7 +90,7 @@ class Config:
     # =========================================
     num_workers: int = 4
     window_size: int = 8
-    window_slide: int = 4
+    window_slide: int = 8
     flush_timeout: int = 30
     min_flush_size: int = 5
     queue_max_size: int = 20
@@ -215,10 +210,17 @@ JSON만 출력하세요."""
     verification_max_retries: int = 3
     verification_retry_delay: float = 1.0
 
+    # =========================================
+    # LangSmith 추적 설정 (팀원별 .env에서 LANGSMITH_PROJECT 변경)
+    # =========================================
+    langsmith_tracing: bool = field(default_factory=lambda: os.getenv("LANGSMITH_TRACING", "false").lower() == "true")
+    langsmith_api_key: str = field(default_factory=lambda: os.getenv("LANGSMITH_API_KEY", ""))
+    langsmith_project: str = field(default_factory=lambda: os.getenv("LANGSMITH_PROJECT", "aegis-default"))
+
     def __post_init__(self):
         """
         초기화 후 실행되는 로직.
-        mock_mode 및 개별 real_* 플래그 값에 따라 활성 엔드포인트를 동적으로 설정합니다.
+        개별 real_* 플래그 값에 따라 활성 엔드포인트를 동적으로 설정합니다.
         """
         # VLM 엔드포인트 설정
         if self.real_vlm:
@@ -232,7 +234,8 @@ JSON만 출력하세요."""
 
         # 정밀 분석 엔드포인트 설정
         if self.real_precision:
-            self.precision_endpoint = self._real_precision_endpoint
+            # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨
+            pass
         else:
             self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
 
@@ -247,3 +250,11 @@ JSON만 출력하세요."""
             self.backend_create_endpoint = base_url
             self.backend_update_endpoint = f"{base_url}/{{event_id}}/analysis"
             self.backend_clip_endpoint = f"{base_url}/{{event_id}}/clip"
+
+        # LangSmith 추적 환경 변수 설정
+        if self.langsmith_tracing and self.langsmith_api_key:
+            os.environ["LANGSMITH_TRACING"] = "true"
+            os.environ["LANGSMITH_API_KEY"] = self.langsmith_api_key
+            os.environ["LANGSMITH_PROJECT"] = self.langsmith_project
+        else:
+            os.environ.pop("LANGSMITH_TRACING", None)

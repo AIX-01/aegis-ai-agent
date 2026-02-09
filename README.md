@@ -32,7 +32,6 @@ src/
 │
 ├── api/
 │   ├── __init__.py
-│   ├── api_server.py           # 독립 실행용 FastAPI 서버 (미사용 - app.py에 통합됨)
 │   └── mock_server.py          # Mock 서버 (VLM, Precision, Backend)
 │
 ├── clients/
@@ -111,11 +110,12 @@ src/
 
 | 설정 | 기본값 | 설명 |
 |------|--------|------|
-| `mock_mode` | `True` | Mock 서버 사용 여부 |
 | `real_vlm` | `False` | 실제 VLM 서버 사용 |
 | `real_precision` | `False` | 실제 정밀 분석 서버 사용 |
 | `real_backend` | `False` | 실제 백엔드 서버 사용 |
-| `real_s3` | `False` | 실제 S3 서버 사용 |
+
+> `config.py`에서 `True`로 설정하면 CLI 플래그 없이도 항상 실제 서버를 사용합니다.
+> CLI 플래그(`--real-vlm` 등)는 `False` → `True` 전환만 가능하며, `True` → `False` 전환은 불가합니다.
 
 **RTSP/프레임 설정:**
 
@@ -366,17 +366,31 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 환경 변수 설정
+
+```bash
+cp .env.sample .env
+```
+
+`.env` 파일을 열고 아래 값을 채워주세요:
+
+| 변수 | 설명 |
+|------|------|
+| `OPENAI_API_KEY` | OpenAI API 키 |
+| `LANGSMITH_TRACING` | LangSmith 추적 활성화 (`true` / `false`) |
+| `LANGSMITH_API_KEY` | LangSmith API 키 ([smith.langchain.com](https://smith.langchain.com)에서 발급) |
+| `LANGSMITH_PROJECT` | LangSmith 프로젝트명 |
+
 ### 실행
 
 ```bash
-# Mock 모드 (기본값)
+# 전체 Mock 모드 (기본값)
 python -m src.app
 
-# 실제 서버 모드
-python -m src.app --no-mock
-
-# 하이브리드 모드
+# 컴포넌트별 실제 서버 사용
+python -m src.app --real-vlm
 python -m src.app --real-vlm --real-backend
+python -m src.app --real-vlm --real-precision --real-backend
 
 # 옵션
 --workers N          # 워커 스레드 수
@@ -547,34 +561,22 @@ graph TD
 
 ## 🐛 Known Issues
 
-> 최종 감사일: 2026-02-05
+> 최종 감사일: 2026-02-09
 
 ### 미구현 코드 (TBD / Placeholder)
 
 | 파일 | 함수/클래스 | 현재 동작 |
 |------|-------------|----------|
-| `retrieval/retriever_factory.py` | `create_retriever()` | None 반환 + 경고 로그 |
-| `retrieval/indexer.py` | `index_document()` | 경고 로그만 출력 |
 | `tools/search_tools.py` | `search_manual()` | 하드코딩 문자열 반환 |
 | `tools/search_tools.py` | `search_past_cases()` | 하드코딩 문자열 반환 |
-| `clients/vector_store_client.py` | `VectorStoreClient` | pass (빈 클래스) |
-| `graph/nodes/verification.py` | `verification_node()` | 무조건 ABNORMAL 반환 (검증 로직 미정) |
 | `graph/nodes/action.py` | `action_node()` | 빈 리스트 반환 |
 | `graph/nodes/generate_report.py` | `generate_report_node()` | "Not Implemented" 반환 |
-
-### 고아 코드
-
-| 파일 | 설명 |
-|------|------|
-| `api/api_server.py` | app.py에 FastAPI 통합됨. AegisAPIServer 클래스 미사용. `run()` 메서드에서 `self.agent.run()` 호출하나 AegisAgent에는 해당 메서드 없음. |
 
 ### 논리적 불일치
 
 | 파일 | 문제 | 상세 |
 |------|------|------|
-| `config.py:19-20` | 실제 서버 엔드포인트 플레이스홀더 | `_real_vlm_endpoint`, `_real_precision_endpoint`에 `<실제 IP>` 형태로 하드코딩 |
 | `graph/state.py:8` | EventType에 "UNKNOWN" 미정의 | precision_analysis_node에서 UNKNOWN 사용하나 Literal에 정의 없음 |
-| `api/mock_server.py:180` | HTTP 메서드 불일치 | MockBackendServer는 PUT, backend_client.update_event()는 PATCH 사용 |
 
 ### 비효율적 코드
 

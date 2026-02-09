@@ -67,11 +67,11 @@ class AegisAgent:
         """모든 컴포넌트를 시작합니다."""
         self.logger.info("=" * 80)
         self.logger.info("AEGIS AI Agent - LangGraph 기반 분석 파이프라인")
-        self.logger.info(f"실행 모드: {'모의(Mock)' if self.config.mock_mode else '실제(Real)'}")
+        real_components = [name for name, flag in [("VLM", self.config.real_vlm), ("Precision", self.config.real_precision), ("Backend", self.config.real_backend)] if flag]
+        self.logger.info(f"실제 서버: {', '.join(real_components) if real_components else '없음 (전체 Mock)'}")
         self.logger.info("=" * 80)
 
-        if self.config.mock_mode:
-            self._start_mock_servers()
+        self._start_mock_servers()
 
         self.consumer_pool.start()
         self.redis_manager.start()
@@ -208,16 +208,12 @@ async def lifespan(app: FastAPI):
     if args.workers:
         config.num_workers = args.workers
     
-    if not args.mock:
-        config.mock_mode = False
+    if args.real_vlm:
         config.real_vlm = True
+    if args.real_precision:
         config.real_precision = True
+    if args.real_backend:
         config.real_backend = True
-    else:
-        config.mock_mode = True
-        config.real_vlm = args.real_vlm
-        config.real_precision = args.real_precision
-        config.real_backend = args.real_backend
 
     if args.log_level:
         config.log_level = args.log_level.upper()
@@ -256,12 +252,10 @@ def parse_args():
     """커맨드 라인 인자를 파싱합니다."""
     parser = argparse.ArgumentParser(description="AEGIS AI Agent - LangGraph 기반 분석 파이프라인")
     parser.add_argument("--workers", type=int, help="컨슈머 워커 스레드 수")
-    parser.add_argument("--no-mock", dest="mock", action="store_false", help="모든 모의 서버 비활성화 (전체 실제 서버 사용)")
-    parser.add_argument("--real-vlm", action="store_true", help="VLM만 실제 서버 사용 (나머지는 Mock)")
-    parser.add_argument("--real-precision", action="store_true", help="정밀 분석만 실제 서버 사용 (나머지는 Mock)")
-    parser.add_argument("--real-backend", action="store_true", help="백엔드만 실제 서버 사용 (나머지는 Mock)")
+    parser.add_argument("--real-vlm", action="store_true", help="VLM 실제 서버 사용")
+    parser.add_argument("--real-precision", action="store_true", help="정밀 분석 실제 서버 사용")
+    parser.add_argument("--real-backend", action="store_true", help="백엔드 실제 서버 사용")
     parser.add_argument("--log-level", type=str, help="로깅 레벨 (DEBUG, INFO, WARNING, ERROR)")
-    parser.set_defaults(mock=True)
     return parser.parse_args()
 
 
