@@ -6,7 +6,7 @@ import random
 import uuid
 from typing import List, Union, Literal, Optional
 from fastapi import FastAPI, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 # README.md 와 state.py 에 정의된 타입
@@ -53,10 +53,10 @@ class PrecisionAnalysisResponse(BaseModel):
 # 백엔드 서버 모델 (DATA-MODEL.md 기준)
 # =========================
 class EventCreationRequest(BaseModel):
-    camera_id: str
+    camera_id: str = Field(alias="cameraId")
     risk: RiskLevel
     type: str
-    occurred_at: str
+    occurred_at: str = Field(alias="occurredAt")
 
 class EventCreationResponse(BaseModel):
     event_id: str
@@ -65,7 +65,7 @@ class EventUpdateRequest(BaseModel):
     risk: Optional[RiskLevel] = None
     type: Optional[EventType] = None
     summary: Optional[str] = None
-    risk_score: Optional[str] = None # VARCHAR(10)
+    risk_score: Optional[str] = Field(default=None, alias="riskScore") # VARCHAR(10)
 
 
 # =========================
@@ -187,11 +187,30 @@ class MockBackendServer:
             return EventCreationResponse(event_id=event_id)
 
         # 2차 분석: 이벤트 갱신
-        @self.app.put("/api/vlm-results/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+        @self.app.patch("/api/vlm-results/{event_id}/analysis", status_code=status.HTTP_204_NO_CONTENT)
         async def update_event(event_id: str, payload: EventUpdateRequest):
             self.logger.info(f"[백엔드 갱신] 2차 분석 결과 수신 (Event ID: {event_id}).")
             self.logger.info(f"  - 데이터: {payload.model_dump_json(exclude_unset=True)}")
             return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+        # 클립 업로드 URL 발급
+        @self.app.get("/api/vlm-results/{event_id}/clip/upload-url")
+        async def get_clip_upload_url(event_id: str):
+            upload_url = f"http://localhost:{self.port}/api/vlm-results/{event_id}/clip/upload"
+            self.logger.info(f"[클립 URL 발급] Event ID: {event_id}")
+            return {"uploadUrl": upload_url}
+
+        # 클립 업로드 수신
+        @self.app.put("/api/vlm-results/{event_id}/clip/upload", status_code=status.HTTP_200_OK)
+        async def upload_clip(event_id: str):
+            self.logger.info(f"[클립 업로드 수신] Event ID: {event_id}")
+            return {"status": "uploaded"}
+
+        # 클립 업로드 확인
+        @self.app.post("/api/vlm-results/{event_id}/clip/confirm", status_code=status.HTTP_200_OK)
+        async def confirm_clip(event_id: str):
+            self.logger.info(f"[클립 확정] Event ID: {event_id}")
+            return {"status": "confirmed"}
 
         @self.app.get("/health")
         async def health():
