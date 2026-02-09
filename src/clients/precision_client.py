@@ -151,8 +151,8 @@ class PrecisionClient:
         Returns:
             완성된 프롬프트 문자열
         """
-        vlm_risk = vlm_metadata.get("risk_level", "UNKNOWN")
-        vlm_event = vlm_metadata.get("event_type", "UNKNOWN")
+        vlm_risk = vlm_metadata.get("risk_level", "")
+        vlm_event = vlm_metadata.get("event_type", "")
 
         context = f"""
 ## 입력 정보
@@ -191,7 +191,7 @@ class PrecisionClient:
             result = json.loads(response)
 
             # 필수 필드 검증
-            event_type = result.get("event_type", "UNKNOWN").upper()
+            event_type = result.get("event_type", "").upper()
             summary = result.get("summary", "")
             risk_score = float(result.get("risk_score", 0.0))
 

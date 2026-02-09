@@ -32,15 +32,15 @@ src/
 │
 ├── api/
 │   ├── __init__.py
-│   ├── api_server.py           # 독립 실행용 FastAPI 서버 (미사용 - app.py에 통합됨)
 │   └── mock_server.py          # Mock 서버 (VLM, Precision, Backend)
 │
 ├── clients/
 │   ├── __init__.py
-│   ├── backend_client.py       # 백엔드 API 클라이언트 (이벤트 CRUD, 클립 업로드)
+│   ├── backend_client.py       # 백엔드 API 클라이언트 (이벤트 CRUD, 클립/보고서 업로드)
 │   ├── precision_client.py     # 정밀 분석 LLM 클라이언트
 │   ├── vlm_client.py           # VLM 분석 클라이언트
-│   └── vector_store_client.py  # Vector DB 클라이언트 (미구현)
+│   ├── vector_store_client.py  # Qdrant Vector DB 클라이언트
+│   └── openai_client.py        # OpenAI API 클라이언트 (Vision, Embedding)
 │
 ├── core/
 │   ├── __init__.py
@@ -58,23 +58,35 @@ src/
 │   ├── state.py                # AnalysisState TypedDict 정의
 │   ├── nodes/
 │   │   ├── __init__.py
-│   │   ├── verification.py     # 검증 노드 (미구현 - 임시 ABNORMAL 반환)
+│   │   ├── verification.py     # 정밀 분석 결과 검증
 │   │   ├── precision_analysis.py # 정밀 분석 LLM 호출
 │   │   ├── update_backend.py   # 백엔드 이벤트 갱신
-│   │   ├── action.py           # 대응 조치 결정 (미구현)
-│   │   └── generate_report.py  # 보고서 생성 (미구현)
+│   │   └── store_embedding.py  # 이벤트 임베딩 저장 (response_agent와 병렬)
+│   ├── subgraphs/
+│   │   ├── __init__.py
+│   │   └── response_agent.py   # ReAct Agent (대응 조치 + 보고서 생성 + 업로드)
 │   └── edges/
 │       ├── __init__.py
 │       └── routers.py          # 조건부 분기 (analysis_router, verification_router)
 │
-├── retrieval/                  # RAG 모듈 (미구현)
+├── services/                   # 비즈니스 로직 서비스
 │   ├── __init__.py
-│   ├── indexer.py              # 문서 인덱싱 (미구현)
-│   └── retriever_factory.py    # Retriever 팩토리 (미구현)
+│   └── report_generator.py     # 보고서 생성 서비스 (HTML, PDF, DOCX, PPTX)
 │
-└── tools/                      # 분석 도구 (미구현)
+└── tools/                      # 분석 도구
     ├── __init__.py
-    └── search_tools.py         # 매뉴얼/사례 검색 (미구현)
+    ├── embedding_tools.py      # 임베딩 도구 (텍스트→벡터 변환)
+    └── search_tools.py         # 매뉴얼/사례 검색 (VectorStoreClient 사용)
+
+templates/
+└── reports/                    # 보고서 템플릿
+    ├── README.md               # 템플릿 사용법
+    ├── report_template.docx    # Word 템플릿
+    ├── report_template.pptx    # PowerPoint 템플릿
+    └── report_template.html    # PDF용 HTML 템플릿
+
+scripts/
+└── test_report_templates.py    # 보고서 템플릿 테스트 스크립트
 ```
 
 ---
@@ -258,6 +270,30 @@ Redis 기반 카메라 동기화를 담당합니다.
 
 ---
 
+### services/report_generator.py - ReportGeneratorService
+
+보고서를 생성하는 서비스입니다.
+
+**generate() 메서드:**
+- 입력: `report_data` (Dict), `frames` (List[bytes]), `formats` (List[str])
+- 출력: `{"html": bytes, "pdf": bytes, "docx": bytes, "pptx": bytes}`
+
+**지원 형식:**
+
+| 형식 | 템플릿 | 설명 |
+|------|--------|------|
+| HTML | `report_template.html` | PDF 변환용 |
+| PDF | - | wkhtmltopdf로 HTML 변환 |
+| DOCX | `report_template.docx` | 공식 문서용 (Frame 1~8 이미지 삽입) |
+| PPTX | `report_template.pptx` | 브리핑용 (4x2 이미지 그리드) |
+
+**플레이스홀더:**
+- `{{occurred_at}}`, `{{event_type}}`, `{{camera_name}}`, `{{camera_location}}`
+- `{{risk_level}}`, `{{risk_score}}`, `{{summary}}`, `{{actions}}`
+- `{{frames}}` 또는 `Frame 1` ~ `Frame 8` (DOCX 표 셀용)
+
+---
+
 ### clients/backend_client.py - BackendClient
 
 백엔드 API 통신을 담당합니다.
@@ -315,9 +351,11 @@ LangGraph 파이프라인의 상태 정의입니다.
 | event_type | EventType | 이벤트 유형 |
 | summary | str | 요약 |
 | risk_score | float | 위험도 점수 |
-| report | str | 최종 보고서 (미구현) |
-| actions | list | 대응 조치 (미구현) |
-| rag_references | list | RAG 참조 (미구현) |
+| report | str | 최종 보고서 |
+| actions | list | 대응 조치 |
+| rag_references | list | RAG 참조 문서 |
+| embedding_stored | bool | 임베딩 저장 여부 |
+| report_updated | bool | 보고서 백엔드 갱신 여부 |
 | errors | List[str] | 오류 목록 |
 
 ---
@@ -327,13 +365,89 @@ LangGraph 파이프라인의 상태 정의입니다.
 LangGraph 워크플로우를 빌드합니다.
 
 ```
-[Entry Point] → analysis_router
-    ├─ NORMAL → END
-    ├─ SUSPICIOUS → verification → verification_router
-    │                                 ├─ ABNORMAL → precision_analysis
-    │                                 └─ else → END
-    └─ ABNORMAL → precision_analysis → update_backend → action → generate_report → END
+[Entry Point] → precision_analysis → verification → update_backend → verification_router
+    ├─ ABNORMAL → response_agent → store_embedding → END
+    └─ SUSPICIOUS → END
 ```
+
+---
+
+### 임베딩 및 RAG 검색 흐름
+
+#### 개요
+
+| 구분 | 동작 | 임베딩 시점 | 저장 여부 |
+|-----|------|-----------|----------|
+| **과거 사례** | `store_embedding` 노드에서 저장 | 사건 처리 완료 시 | ✅ Qdrant에 저장 |
+| **현재 사건 (검색용)** | `search_protocol_and_cases` 도구에서 검색 | 검색 시 실시간 | ❌ 저장 안 함 |
+
+#### 저장 흐름 (store_embedding)
+
+현재 사건을 **미래 검색을 위해** Qdrant에 저장합니다.
+
+```
+[현재 사건 처리 완료]
+    ↓
+store_embedding 노드
+    ↓
+임베딩 대상 텍스트 구성:
+    "카메라: {camera_name} ({camera_location})
+     발생시각: {occurred_at}
+     이벤트유형: {event_type}
+     상황: {summary}"
+    ↓
+OpenAI Embedding API 호출 → 벡터 변환
+    ↓
+Qdrant (past_cases 컬렉션) 저장
+```
+
+**저장 데이터 (Payload):**
+
+| 필드 | 설명 |
+|-----|------|
+| `event_id` | 백엔드 이벤트 ID |
+| `camera_uuid` | 카메라 UUID |
+| `camera_name` | 카메라 이름 |
+| `camera_location` | 카메라 위치 |
+| `event_type` | 이벤트 유형 |
+| `risk_level` | 위험도 |
+| `risk_score` | 위험 점수 |
+| `summary` | 상황 요약 |
+| `occurred_at` | 발생 시각 |
+| `text_embedded` | 임베딩된 원본 텍스트 |
+
+#### 검색 흐름 (search_protocol_and_cases)
+
+현재 사건과 유사한 **과거 사례**를 검색합니다.
+
+```
+[response_agent에서 도구 호출]
+    ↓
+search_protocol_and_cases(query=summary, event_type=event_type)
+    ↓
+query를 실시간 임베딩 (OpenAI Embedding API)
+    ↓
+Qdrant (past_cases 컬렉션) 유사도 검색
+    ↓
+유사한 과거 사례 반환 + 대응 매뉴얼 템플릿
+```
+
+#### 흐름 다이어그램
+
+```
+[과거 사건 A] → store_embedding → Qdrant 저장 ──┐
+[과거 사건 B] → store_embedding → Qdrant 저장 ──┼─→ past_cases 컬렉션
+[과거 사건 C] → store_embedding → Qdrant 저장 ──┘
+                                                    ↑
+[현재 사건 D]                                       │
+    ├─ response_agent ─→ search_protocol_and_cases ─┘ (실시간 임베딩 → 유사도 검색)
+    └─ store_embedding ─→ Qdrant 저장 (미래 검색용)
+```
+
+**핵심 포인트:**
+- 현재 사건은 **검색 시 실시간 임베딩**되어 과거 사례와 비교됨
+- 현재 사건은 **처리 완료 후 저장**되어 미래 검색에 활용됨
+- 두 작업은 **독립적**이라 병렬 실행해도 문제없음
 
 ---
 
@@ -352,7 +466,18 @@ LangGraph 워크플로우를 빌드합니다.
 
 **MockBackendServer (포트 8088):**
 - POST /api/vlm-results → event_id 생성
-- PUT /api/vlm-results/{event_id} → 이벤트 갱신
+- PATCH /api/vlm-results/{event_id} → 이벤트 갱신 (report, actions 포함)
+- POST /api/vlm-results/{event_id}/report → 보고서 업로드 URL 반환
+- PUT /api/vlm-results/{event_id}/report/upload → 보고서 로컬 저장
+
+**Mock 보고서 저장 위치:**
+```
+mock_reports/
+└── {event_id}/
+    ├── report.pdf
+    ├── report.docx
+    └── report.pptx
+```
 
 ---
 
@@ -362,26 +487,193 @@ LangGraph 워크플로우를 빌드합니다.
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 실행
+### 환경 변수 설정 (.env 파일)
 
 ```bash
-# Mock 모드 (기본값)
-python -m src.app
-
-# 실제 서버 모드
-python -m src.app --no-mock
-
-# 하이브리드 모드
-python -m src.app --real-vlm --real-backend
-
-# 옵션
---workers N          # 워커 스레드 수
---log-level DEBUG    # 로그 레벨
+# OpenAI API 키 (정밀 분석, 검증, 임베딩에 사용)
+OPENAI_API_KEY=sk-your-openai-api-key
 ```
+
+---
+
+### CLI 옵션
+
+| 옵션 | 설명 | 기본값 |
+|------|------|--------|
+| `--no-mock` | 모든 컴포넌트를 실제 서버로 전환 | False |
+| `--real-vlm` | VLM만 실제 서버 사용 | False |
+| `--real-precision` | 정밀 분석만 OpenAI API 사용 | False |
+| `--real-backend` | 백엔드만 실제 서버 사용 | False |
+| `--workers N` | 컨슈머 워커 스레드 수 | 4 |
+| `--log-level LEVEL` | 로그 레벨 (DEBUG/INFO/WARNING/ERROR) | INFO |
+
+---
+
+### 실행 명령어 예시
+
+#### 1. 전체 Mock 모드 (로컬 테스트)
+```bash
+python -m src.app
+```
+- VLM: Mock 서버 (localhost:8001)
+- 정밀 분석: Mock 서버 (localhost:8002)
+- 백엔드: Mock 서버 (localhost:8088)
+- 보고서: `mock_reports/{event_id}/` 로컬 저장
+
+---
+
+#### 2. OpenAI API만 실제 사용 (정밀 분석 + 검증)
+```bash
+python -m src.app --real-precision
+```
+- VLM: Mock 서버
+- **정밀 분석: OpenAI GPT-4.1-mini** (`config.openai_chat_model`)
+- **검증(Verification): OpenAI Vision API**
+- 백엔드: Mock 서버
+
+**사용되는 설정 (config.py):**
+```python
+openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+openai_chat_model: str = "gpt-4.1-mini"
+```
+
+---
+
+#### 3. 실제 VLM 서버 사용
+```bash
+python -m src.app --real-vlm
+```
+- **VLM: 실제 서버** (`config._real_vlm_endpoint`)
+- 정밀 분석: Mock 서버
+- 백엔드: Mock 서버
+
+**config.py에서 설정:**
+```python
+_real_vlm_endpoint: str = "https://your-vlm-server/v1"
+_real_vlm_api_key: str = "your-vlm-api-key"
+_real_vlm_model_id: str = "your-model-id"
+```
+
+---
+
+#### 4. 실제 백엔드 서버 사용
+```bash
+python -m src.app --real-backend
+```
+- VLM: Mock 서버
+- 정밀 분석: Mock 서버
+- **백엔드: 실제 Spring Boot 서버**
+
+**config.py에서 설정:**
+```python
+_real_backend_create_endpoint: str = "http://localhost:8080/internal/agent/events"
+_real_backend_update_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/analysis"
+_real_backend_clip_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/clip"
+_real_backend_report_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/report"
+```
+
+---
+
+#### 5. 하이브리드 모드 (조합)
+```bash
+# VLM 실제 + 정밀분석 OpenAI + 백엔드 Mock
+python -m src.app --real-vlm --real-precision
+
+# VLM Mock + 정밀분석 OpenAI + 백엔드 실제
+python -m src.app --real-precision --real-backend
+
+# 모든 컴포넌트 실제 서버
+python -m src.app --no-mock
+```
+
+---
+
+#### 6. 디버그 모드
+```bash
+python -m src.app --log-level DEBUG --workers 2
+```
+
+---
+
+### 백엔드 API 엔드포인트
+
+#### 1차 분석 후 이벤트 생성 (CREATE)
+```
+POST /internal/agent/events
+```
+```json
+{
+  "cameraId": "uuid",
+  "risk": "ABNORMAL",
+  "type": "ASSAULT",
+  "occurredAt": "2026-02-09T14:30:00"
+}
+```
+**응답:** `{"event_id": "uuid"}`
+
+---
+
+#### 2차 분석 후 이벤트 갱신 (UPDATE)
+```
+PATCH /internal/agent/events/{event_id}/analysis
+```
+```json
+{
+  "risk": "ABNORMAL",
+  "type": "ASSAULT",
+  "summary": "검은 후드티를 입은 중년 남성이...",
+  "riskScore": "0.85",
+  "report": {
+    "content": "# 보고서 마크다운...",
+    "files": {
+      "pdf": "reports/{event_id}/report.pdf",
+      "docx": "reports/{event_id}/report.docx",
+      "pptx": "reports/{event_id}/report.pptx"
+    },
+    "generated_at": "2026-02-09T14:35:00"
+  },
+  "actions": [
+    {"type": "emergency_call", "description": "112 긴급 신고 완료"},
+    {"type": "field_action", "description": "보안팀 현장 출동 지시"}
+  ]
+}
+```
+
+---
+
+### Mock 서버 단독 실행
+
+보고서 형식 테스트를 위해 Mock 백엔드 서버만 실행할 수 있습니다:
+
+```bash
+cd aegis-ai-agent/src
+python -m api.mock_server
+```
+
+**또는 특정 서버만 실행:**
+
+```bash
+# Mock 백엔드 서버만 (포트 8088)
+python -c "from api.mock_server import MockBackendServer; MockBackendServer().run()"
+
+# Mock VLM 서버만 (포트 8001)
+python -c "from api.mock_server import MockVLMServer; MockVLMServer().run()"
+
+# Mock 정밀분석 서버만 (포트 8002)
+python -c "from api.mock_server import MockPrecisionServer; MockPrecisionServer().run()"
+```
+
+### 보고서 템플릿 테스트
+
+```bash
+cd aegis-ai-agent
+python scripts/test_report_templates.py
+```
+결과: `mock_reports/test_output/` 폴더에 PDF, DOCX, PPTX 생성
 
 ---
 
@@ -418,18 +710,32 @@ graph TD
         Clip ~~~ Start
         Start("13. Start<br>(with event_id)")
         
-        Start --> Router2{"14. 1차 분석 결과<br>(Conditional Entry)"}
-        Router2 -- "이상" --> N_Precise["15. 정밀 분석 LLM <br>(precision_analysis)"]
-        Router2 -- "의심" --> N_Verify["15. 검증<br>(verification)"]
+        Start --> N_Precise["14. 정밀 분석 LLM <br>(precision_analysis)"]
+        N_Precise --> N_Verify["15. 검증<br>(verification)"]
+        N_Verify --> N_Update["16. 백엔드 갱신<br>(update_backend)"]
+        N_Update --> Router2{"17. 검증 결과<br>(verification_router)"}
         
-        N_Verify --> Router3{"15. 검증 결과"}
-        Router3 -- "이상" --> N_Precise
-        Router3 -- "의심" --> EndGraph((End))
+        Router2 -- "이상" --> N_Embed["18. 임베딩 저장<br>(store_embedding)"]
+        Router2 -- "의심" --> EndGraph((End))
         
-        N_Precise --> N_Update["16. 상세 결과 백엔드 갱신<br>(update_backend)"]
-        N_Update --> N_Action["17. 대응 조치<br>(action)"]
-        N_Action --> N7["18. 최종 보고서 생성<br>(generate_report)"]
-        N7 --> EndGraph
+        N_Embed --> EndGraph
+        
+        Router2 -- "이상" --> SubAgent
+        
+        subgraph SubAgent["18. response_agent (ReAct Agent 서브그래프)"]
+            direction TB
+            SA_Agent["LLM Agent"]
+            SA_Tools["도구 실행<br>(search_protocol_and_cases,<br>execute_field_action,<br>emergency_call)"]
+            SA_Report["보고서 생성<br>(generate_report)"]
+            SA_UpdateBackend["백엔드 갱신<br>(update_backend)"]
+            
+            SA_Agent -- "도구 호출" --> SA_Tools
+            SA_Tools -- "결과 반환" --> SA_Agent
+            SA_Agent -- "완료" --> SA_Report
+            SA_Report --> SA_UpdateBackend
+        end
+        
+        SubAgent --> EndGraph
     end
 
     Clip ==> Start
@@ -448,7 +754,7 @@ graph TD
    - VLM 1차 분석
    - NORMAL이면 종료
    - 이상 감지 시: 백엔드 보고 → 클립 생성/업로드 → LangGraph
-7. LangGraph: verification → precision_analysis → update_backend → action → generate_report
+7. LangGraph: precision_analysis → verification → update_backend → verification_router → (이상: response_agent → store_embedding / 의심: End)
 
 ### 상세 데이터 흐름
 
@@ -512,32 +818,62 @@ graph TD
         direction TB
 
         D_Input[("13. LangGraph Input<br>camera_info, frames<br>vlm_result, event_id")]:::data
-        Router{"14. analysis_router"}:::router
+        N_Precise["14. precision_analysis"]:::proc
         N_Verify["15. verification"]:::proc
-        N_Precise["15. precision_analysis"]:::proc
-        Router2{"16. verification_router"}:::router
-        N_Update["17. update_backend"]:::proc
+        N_Update["16. update_backend"]:::proc
         Backend2["스프링부트 백엔드"]:::ext
-        N_Action["18. action"]:::proc
-        N7["19. generate_report"]:::proc
+        Router{"17. verification_router"}:::router
+        N_Embed["18. store_embedding"]:::proc
+        Qdrant[("Qdrant<br>past_cases")]:::ext
         EndFinal((End)):::proc
 
         D_Detail[("상세 분석 결과<br>summary, risk_score")]:::data
-        D_Req2[("Request<br>risk, type, summary")]:::data
+        D_Verify[("검증 결과<br>risk_level")]:::data
+        D_Req2[("Request<br>risk, type, summary,<br>risk_score")]:::data
+        D_Embed[("Embedding Data<br>camera_uuid, camera_name,<br>camera_location, event_type,<br>risk_level, risk_score,<br>summary, occurred_at<br><br>임베딩 대상: 카메라정보<br>+ 시간 + 이벤트 + summary")]:::data
+        D_Report[("보고서 + 대응조치<br>actions, report")]:::data
 
-        D_Input --> Router
-        Router -- "의심" --> N_Verify
-        Router -- "이상" --> N_Precise
-        N_Verify --> Router2
-        Router2 -- "의심" --> EndFinal
-        Router2 -- "이상" --> N_Precise
+        D_Input --> N_Precise
         N_Precise --> D_Detail
-        D_Detail --> N_Update
+        D_Detail --> N_Verify
+        N_Verify --> D_Verify
+        D_Verify --> N_Update
         N_Update -.-> D_Req2
         D_Req2 -.-> Backend2
-        N_Update --> N_Action
-        N_Action --> N7
-        N7 --> EndFinal
+        N_Update --> Router
+        Router -- "이상" --> N_Embed
+        Router -- "의심" --> EndFinal
+        N_Embed -.-> D_Embed
+        D_Embed -.-> Qdrant
+        N_Embed --> EndFinal
+        
+        Router -- "이상" --> SubAgent
+        
+        subgraph SubAgent["18. response_agent (ReAct Agent 서브그래프)"]
+            direction TB
+            SA_Agent["LLM Agent"]:::proc
+            SA_Tools["도구 실행"]:::proc
+            SA_Extract["조치 추출"]:::proc
+            SA_Report["보고서 생성"]:::proc
+            SA_UpdateBackend["백엔드 갱신"]:::proc
+            
+            D_Context[("상황 정보<br>event_type, summary,<br>risk_level")]:::data
+            D_ToolResult[("검색 결과<br>매뉴얼, 과거사례,<br>현장조치, 신고결과")]:::data
+            D_Actions[("대응 조치<br>field_action, emergency_call")]:::data
+            
+            D_Context --> SA_Agent
+            SA_Agent -- "도구 호출" --> SA_Tools
+            SA_Tools -.-> D_ToolResult
+            D_ToolResult --> SA_Agent
+            SA_Agent -- "완료" --> SA_Extract
+            SA_Extract --> D_Actions
+            D_Actions --> SA_Report
+            SA_Report --> SA_UpdateBackend
+            SA_UpdateBackend -.-> Backend2
+        end
+        
+        SubAgent --> D_Report
+        D_Report --> EndFinal
     end
 
     Clip ==> D_Input
@@ -547,41 +883,28 @@ graph TD
 
 ## 🐛 Known Issues
 
-> 최종 감사일: 2026-02-05
+> 최종 갱신일: 2026-02-09
 
-### 미구현 코드 (TBD / Placeholder)
+### 구현 상태
 
-| 파일 | 함수/클래스 | 현재 동작 |
-|------|-------------|----------|
-| `retrieval/retriever_factory.py` | `create_retriever()` | None 반환 + 경고 로그 |
-| `retrieval/indexer.py` | `index_document()` | 경고 로그만 출력 |
-| `tools/search_tools.py` | `search_manual()` | 하드코딩 문자열 반환 |
-| `tools/search_tools.py` | `search_past_cases()` | 하드코딩 문자열 반환 |
-| `clients/vector_store_client.py` | `VectorStoreClient` | pass (빈 클래스) |
-| `graph/nodes/verification.py` | `verification_node()` | 무조건 ABNORMAL 반환 (검증 로직 미정) |
-| `graph/nodes/action.py` | `action_node()` | 빈 리스트 반환 |
-| `graph/nodes/generate_report.py` | `generate_report_node()` | "Not Implemented" 반환 |
+| 파일 | 함수/클래스 | 상태 | 설명 |
+|------|-------------|------|------|
+| `services/report_generator.py` | `ReportGeneratorService` | ✅ 완료 | HTML, PDF, DOCX, PPTX 보고서 생성 |
+| `graph/subgraphs/response_agent.py` | `generate_report_node()` | ✅ 완료 | 보고서 생성 + Mock 서버 업로드 |
+| `graph/subgraphs/response_agent.py` | `execute_field_action()` | ⚠️ Mock | CCTV 방송/조명/PTZ/사이렌 제어 (Mock 응답) |
+| `graph/subgraphs/response_agent.py` | `emergency_call()` | ⚠️ Mock | 112/119/보안팀 신고 (Mock 응답) |
+| `graph/subgraphs/response_agent.py` | `search_protocol_and_cases()` | ⚠️ 일부 Mock | 과거 사례는 Qdrant 검색, 매뉴얼은 하드코딩 |
+| `clients/vector_store_client.py` | `VectorStoreClient` | ✅ 완료 | Qdrant 연동 (store_embedding에서 사용) |
+| `graph/nodes/verification.py` | `verification_node()` | ✅ 완료 | OpenAI Vision API 호출 |
 
-### 고아 코드
+### Mock 상태인 기능 (운영 환경 연동 필요)
 
-| 파일 | 설명 |
-|------|------|
-| `api/api_server.py` | app.py에 FastAPI 통합됨. AegisAPIServer 클래스 미사용. `run()` 메서드에서 `self.agent.run()` 호출하나 AegisAgent에는 해당 메서드 없음. |
+| 기능 | 현재 상태 | 운영 환경 필요 작업 |
+|------|----------|-------------------|
+| 현장 조치 (execute_field_action) | Mock 응답 반환 | 실제 CCTV 장비 제어 API 연동 |
+| 긴급 신고 (emergency_call) | Mock 응답 반환 | 112/119 신고 시스템 연동 |
+| 대응 매뉴얼 검색 | 코드에 하드코딩 | Qdrant `manuals` 컬렉션 구축 |
 
-### 논리적 불일치
-
-| 파일 | 문제 | 상세 |
-|------|------|------|
-| `config.py:19-20` | 실제 서버 엔드포인트 플레이스홀더 | `_real_vlm_endpoint`, `_real_precision_endpoint`에 `<실제 IP>` 형태로 하드코딩 |
-| `graph/state.py:8` | EventType에 "UNKNOWN" 미정의 | precision_analysis_node에서 UNKNOWN 사용하나 Literal에 정의 없음 |
-| `api/mock_server.py:180` | HTTP 메서드 불일치 | MockBackendServer는 PUT, backend_client.update_event()는 PATCH 사용 |
-
-### 비효율적 코드
-
-| 파일 | 문제 | 상세 | 권장 조치 |
-|------|------|------|----------|
-| `core/producer.py:196-217` | 모든 패킷 디코딩 | 1fps 분석에도 모든 패킷을 디코딩 후 대부분 버림 | 선택적 디코딩 또는 코덱 컨텍스트 유지 |
-| `core/windowing.py:70-92` | 폴링 기반 윈도우 생성 | 0.1초마다 전체 카메라 버퍼 순회 | 이벤트 기반 처리로 변경 |
 
 ### 보안 이슈
 

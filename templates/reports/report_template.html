@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: 'Pretendard', sans-serif; line-height: 1.6; color: #333; padding: 40px; }
+        .header { display: flex; justify-content: space-between; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 30px; }
+        .logo { font-weight: bold; font-size: 1.2rem; color: #1a2a6c; }
+
+        .risk-badge { padding: 5px 15px; border-radius: 4px; color: white; font-weight: bold; }
+        .ABNORMAL { background-color: #d9534f; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f8f9fa; width: 20%; }
+
+        .section-title { font-size: 1.3rem; margin-top: 30px; border-left: 5px solid #1a2a6c; padding-left: 10px; }
+        .footer { margin-top: 50px; font-size: 0.9rem; color: #777; text-align: right; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">AEGIS AI AGENT</div>
+        <div>CCTV 이상 상황 대응 보고서</div>
+    </div>
+
+    <h2 class="section-title">1. 사건 개요</h2>
+    <table>
+        <tr>
+            <th>발생 일시</th><td>{{occurred_at}}</td>
+            <th>이벤트 유형</th><td>{{event_type}}</td>
+        </tr>
+        <tr>
+            <th>카메라 위치</th><td>{{camera_location}} ({{camera_name}})</td>
+            <th>위험도</th>
+            <td><span class="risk-badge {{risk_level}}">{{risk_level}}</span> ({{risk_score}}점)</td>
+        </tr>
+    </table>
+
+    <h2 class="section-title">2. 상황 요약</h2>
+    <div style="background: #fdfdfd; padding: 15px; border: 1px solid #eee;">
+        {{summary}}
+    </div>
+
+    <h2 class="section-title">3. 캡처 프레임</h2>
+    <div style="background: #fdfdfd; padding: 15px; border: 1px solid #eee;">
+        {{frames}}
+    </div>
+
+    <h2 class="section-title">4. 대응 조치</h2>
+    <ul>
+        {{actions}}
+    </ul>
+
+    <div class="footer">
+        보고서 생성 시각: {{generated_at}}<br>
+        본 보고서는 AEGIS AI Agent에 의해 자동 생성되었습니다.
+    </div>
+</body>
+</html>
+

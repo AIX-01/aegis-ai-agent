@@ -38,14 +38,14 @@ def precision_analysis_node(state: AnalysisState, precision_client: PrecisionCli
         if result:
             # 결과 파싱 및 상태 업데이트
             # DATA-MODEL.md의 EventRisk와 EventType을 참고하여 risk_level 결정
-            new_event_type: EventType = result.get("event_type", "UNKNOWN").upper()
+            new_event_type: EventType = result.get("event_type", "").upper()
             new_summary: str = result.get("summary", "")
             new_risk_score: float = result.get("risk_score", 0.0)
 
-            # event_type에 따라 risk_level 결정 (예시 로직, 필요시 상세화)
+            # event_type에 따라 risk_level 결정
             if new_event_type in ["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]:
                 new_risk_level: RiskLevel = "ABNORMAL"
-            elif new_event_type == "UNKNOWN" and new_risk_score > 0.5: # 점수가 높으면 SUSPICIOUS
+            elif new_risk_score > 0.5:  # 유효한 event_type이 없지만 점수가 높으면 SUSPICIOUS
                 new_risk_level = "SUSPICIOUS"
             else:
                 new_risk_level = "NORMAL"
