@@ -22,7 +22,7 @@ class Config:
     # ===================================================================
     # >> 1. 실제 서버 주소 설정 (이 부분을 실제 운영 서버에 맞게 수정하세요)
     # ===================================================================
-    _real_vlm_endpoint: str = "https://roz6vbfcc1jn82-8000.proxy.runpod.net/v1"
+    _real_vlm_endpoint: str = "https://apsj89ztypyzpr-8000.proxy.runpod.net/v1"
     _real_vlm_api_key: str = "sk-IrR7Bwxtin0haWagUnPrBgq5PurnUz86"
     _real_vlm_model_id: str = "AIX-01/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit-3000steps-r64-b8-merged-16bit"
     # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨
@@ -95,7 +95,7 @@ class Config:
     # =========================================
     num_workers: int = 4
     window_size: int = 8
-    window_slide: int = 4
+    window_slide: int = 8
     flush_timeout: int = 30
     min_flush_size: int = 5
     queue_max_size: int = 20
@@ -215,6 +215,13 @@ JSON만 출력하세요."""
     verification_max_retries: int = 3
     verification_retry_delay: float = 1.0
 
+    # =========================================
+    # LangSmith 추적 설정 (팀원별 .env에서 LANGSMITH_PROJECT 변경)
+    # =========================================
+    langsmith_tracing: bool = field(default_factory=lambda: os.getenv("LANGSMITH_TRACING", "false").lower() == "true")
+    langsmith_api_key: str = field(default_factory=lambda: os.getenv("LANGSMITH_API_KEY", ""))
+    langsmith_project: str = field(default_factory=lambda: os.getenv("LANGSMITH_PROJECT", "aegis-default"))
+
     def __post_init__(self):
         """
         초기화 후 실행되는 로직.
@@ -232,7 +239,8 @@ JSON만 출력하세요."""
 
         # 정밀 분석 엔드포인트 설정
         if self.real_precision:
-            self.precision_endpoint = self._real_precision_endpoint
+            # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨
+            pass
         else:
             self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
 
@@ -247,3 +255,11 @@ JSON만 출력하세요."""
             self.backend_create_endpoint = base_url
             self.backend_update_endpoint = f"{base_url}/{{event_id}}/analysis"
             self.backend_clip_endpoint = f"{base_url}/{{event_id}}/clip"
+
+        # LangSmith 추적 환경 변수 설정
+        if self.langsmith_tracing and self.langsmith_api_key:
+            os.environ["LANGSMITH_TRACING"] = "true"
+            os.environ["LANGSMITH_API_KEY"] = self.langsmith_api_key
+            os.environ["LANGSMITH_PROJECT"] = self.langsmith_project
+        else:
+            os.environ.pop("LANGSMITH_TRACING", None)

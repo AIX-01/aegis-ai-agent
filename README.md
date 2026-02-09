@@ -366,6 +366,21 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 환경 변수 설정
+
+```bash
+cp .env.sample .env
+```
+
+`.env` 파일을 열고 아래 값을 채워주세요:
+
+| 변수 | 설명 |
+|------|------|
+| `OPENAI_API_KEY` | OpenAI API 키 |
+| `LANGSMITH_TRACING` | LangSmith 추적 활성화 (`true` / `false`) |
+| `LANGSMITH_API_KEY` | LangSmith API 키 ([smith.langchain.com](https://smith.langchain.com)에서 발급) |
+| `LANGSMITH_PROJECT` | LangSmith 프로젝트명 |
+
 ### 실행
 
 ```bash
@@ -561,12 +576,6 @@ graph TD
 | `graph/nodes/verification.py` | `verification_node()` | 무조건 ABNORMAL 반환 (검증 로직 미정) |
 | `graph/nodes/action.py` | `action_node()` | 빈 리스트 반환 |
 | `graph/nodes/generate_report.py` | `generate_report_node()` | "Not Implemented" 반환 |
-
-### 고아 코드
-
-| 파일 | 설명 |
-|------|------|
-| `api/api_server.py` | app.py에 FastAPI 통합됨. AegisAPIServer 클래스 미사용. `run()` 메서드에서 `self.agent.run()` 호출하나 AegisAgent에는 해당 메서드 없음. |
 
 ### 논리적 불일치
 
