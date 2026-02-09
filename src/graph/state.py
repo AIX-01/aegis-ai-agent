@@ -27,6 +27,7 @@ class AnalysisState(TypedDict):
     camera_location: str               # [M/S] 카메라 위치
     occurred_at: datetime              # [M/S] 분석 윈도우의 시작 시점
     frames: List[bytes]                # [M]   JPEG 이미지 바이트 리스트
+    frame_timestamps: List[datetime]   # [M]   각 프레임의 타임스탬프 리스트
     event_id: str                      # [M/S] 백엔드에서 생성된 이벤트 ID
     vlm_result: Dict[str, Any]         # [M]   1차 VLM 분석 원본 결과
     window_start: Union[int, str]      # [M]   윈도우 시작 시간

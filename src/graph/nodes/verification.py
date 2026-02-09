@@ -73,15 +73,22 @@ def verification_node(state: AnalysisState, config: Config) -> Dict[str, Any]:
 
         if result:
             new_risk_level = result.get("risk_level", current_risk_level)
+            new_event_type = result.get("event_type", state.get("event_type", ""))
             reason = result.get("reason", "")
 
-            # reason은 로그에만 출력 (state에 저장하지 않음)
-            logger.info(f"[{camera_id}] 검증 완료: {new_risk_level} (사유: {reason})")
+            # 로그 출력
+            if new_event_type != state.get("event_type", ""):
+                logger.info(f"[{camera_id}] 검증 완료: {new_risk_level}, 이벤트 유형 수정: {state.get('event_type')} → {new_event_type} (사유: {reason})")
+            else:
+                logger.info(f"[{camera_id}] 검증 완료: {new_risk_level} (사유: {reason})")
 
             return {
                 "risk_level": new_risk_level,
+                "event_type": new_event_type,
                 "verification_result": {
-                    "risk_level": new_risk_level
+                    "risk_level": new_risk_level,
+                    "event_type": new_event_type,
+                    "reason": reason
                 }
             }
         else:
@@ -122,17 +129,86 @@ def _build_prompt(system_prompt: str, precision_result: Dict[str, Any], state: A
     summary = precision_result.get("summary", state.get("summary", ""))
     risk_score = precision_result.get("risk_score", state.get("risk_score", 0.0))
 
+    # 추가 컨텍스트 정보
+    camera_name = state.get("camera_name", "")
+    camera_location = state.get("camera_location", "")
+    occurred_at = state.get("occurred_at", "")
+    vlm_result = state.get("vlm_result", {})
+    vlm_risk = vlm_result.get("risk_level", vlm_result.get("class1", ""))
+    vlm_type = vlm_result.get("event_type", vlm_result.get("class2", ""))
+
+    # 프레임별 타임스탬프 정보 구성
+    frame_timestamps = state.get("frame_timestamps", [])
+    frame_time_info = ""
+    if frame_timestamps and len(frame_timestamps) > 0:
+        first_ts = frame_timestamps[0]
+        frame_lines = []
+        for i, ts in enumerate(frame_timestamps):
+            if hasattr(ts, 'strftime'):
+                time_str = ts.strftime("%H:%M:%S")
+            else:
+                time_str = str(ts)
+            # 첫 프레임 기준 경과 시간 계산
+            if i == 0:
+                elapsed = "0.0초"
+            elif hasattr(ts, 'timestamp') and hasattr(first_ts, 'timestamp'):
+                elapsed = f"{ts.timestamp() - first_ts.timestamp():.1f}초"
+            else:
+                elapsed = f"{i}초"
+            frame_lines.append(f"- Frame {i+1}: {time_str} (경과: {elapsed})")
+        frame_time_info = "\n".join(frame_lines)
+    else:
+        frame_time_info = "- 타임스탬프 정보 없음"
+
     context = f"""
-## 정밀 분석 결과
+## 카메라 정보
+- 카메라 이름: {camera_name}
+- 카메라 위치: {camera_location}
+- 발생 시각: {occurred_at}
+
+## 프레임별 시간 정보
+{frame_time_info}
+
+## 1차 VLM 분석 결과
+- 위험도: {vlm_risk}
+- 이벤트 유형: {vlm_type}
+
+## 2차 정밀 분석 결과 (검증 대상)
 - 위험도(risk_level): {risk_level}
 - 이벤트 유형(event_type): {event_type}
 - 요약(summary): {summary}
 - 위험 점수(risk_score): {risk_score}
 
 ## 검증 요청
-위 정밀 분석 결과와 제공된 8개의 이미지를 비교하여 최종 위험도를 판정해주세요.
-- 분석 결과(summary)가 이미지와 일치하는지 확인하세요.
-- 이벤트 유형(event_type)이 실제 상황과 맞는지 확인하세요.
+위 정밀 분석 결과와 제공된 8개의 이미지를 비교하여 최종 판정을 해주세요.
+
+**판정 기준:**
+1. **이미지 확인**: 8개 이미지에서 이상 상황(폭행, 절도, 무단투기, 실신, 기물파손)이 실제로 보이는지 확인
+2. **시간 흐름 분석**: 프레임별 타임스탬프를 보고 움직임의 변화/흐름을 파악
+3. **장소 맥락**: 카메라 위치({camera_location})를 고려하여 해당 장소에서 발생 가능한 상황인지 판단
+4. **VLM vs 정밀분석 비교**: 1차 VLM({vlm_type})과 2차 정밀분석({event_type})이 다르면 이미지를 보고 어느 쪽이 맞는지 판단
+5. **요약 검증**: summary 내용이 이미지에서 실제로 확인되는지 검증
+
+**응답 형식 (JSON):**
+```json
+{{
+  "risk_level": "ABNORMAL 또는 SUSPICIOUS",
+  "event_type": "실제 이벤트 유형 (ASSAULT/BURGLARY/DUMP/SWOON/VANDALISM)",
+  "reason": "판단 근거 설명"
+}}
+```
+
+**판정 예시:**
+- 이미지에 이상 상황이 명확히 보이고 분석이 정확하면:
+  {{"risk_level": "ABNORMAL", "event_type": "{event_type}", "reason": "이미지에서 {event_type} 상황이 명확히 확인됨"}}
+
+- 이미지에 이상 상황이 있지만 event_type이 다르면:
+  {{"risk_level": "ABNORMAL", "event_type": "실제_유형", "reason": "{event_type}이 아닌 실제_유형으로 확인됨"}}
+
+- 이미지에서 이상 상황이 확인되지 않으면 (오탐지):
+  {{"risk_level": "SUSPICIOUS", "event_type": "{event_type}", "reason": "이미지에서 이상 상황이 명확히 확인되지 않음"}}
+
+**event_type 선택지:** ASSAULT(폭행), BURGLARY(절도), DUMP(무단투기), SWOON(실신), VANDALISM(기물파손)
 """
 
     return f"{system_prompt}\n{context}"
@@ -174,6 +250,13 @@ def _parse_response(raw_response: str) -> Dict[str, Any]:
             result["risk_level"] = risk_level
         else:
             result["risk_level"] = "SUSPICIOUS"  # 기본값
+
+        # event_type 정규화
+        valid_event_types = ["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]
+        event_type = result.get("event_type", "").upper()
+        if event_type in valid_event_types:
+            result["event_type"] = event_type
+        # event_type이 없거나 유효하지 않으면 그대로 둠 (기존 값 사용)
 
         return result
 

@@ -183,6 +183,7 @@ class ConsumerPool:
                             "camera_location": camera_info.get("location", "unknown"),
                             "occurred_at": occurred_at,
                             "frames": frames,
+                            "frame_timestamps": frame_timestamps,  # 프레임별 타임스탬프 추가
                             "vlm_result": vlm_result,
                             "risk_level": risk_level,
                             "event_type": event_type,

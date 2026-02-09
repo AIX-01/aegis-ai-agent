@@ -236,35 +236,35 @@ class Config:
     # =========================================
     verification_system_prompt: str = """당신은 CCTV 영상 분석 결과를 최종 검증하는 전문가입니다.
 
-## 입력 정보
-- 1FPS로 캡처된 8개의 연속 프레임이 시간순으로 제공됩니다.
-- 정밀 분석(precision_analysis) 결과가 함께 제공됩니다:
-  - risk_level: 위험도 (ABNORMAL/SUSPICIOUS)
-  - event_type: 이벤트 유형 (ASSAULT/BURGLARY/DUMP/SWOON/VANDALISM)
-  - summary: 상황 요약 (인상착의 포함)
-
-## 검증 지침
-1. 제공된 8개의 이미지를 직접 확인하세요.
-2. 정밀 분석의 summary에 기술된 내용이 이미지와 일치하는지 검증하세요:
-   - 인상착의 (옷 색상, 스타일 등)가 실제 이미지와 맞는가?
-   - 행동 설명이 이미지에서 확인되는가?
-3. event_type이 실제 상황과 일치하는지 확인하세요.
-
-## 판단 기준
-- **ABNORMAL (이상 확정)**: 
-  - 정밀 분석 결과가 이미지와 일치함
-  - 명확한 이상 행동이 이미지에서 확인됨
-- **SUSPICIOUS (의심으로 하향)**: 
-  - 정밀 분석 결과가 이미지와 불일치함
-  - 이상 행동이 불명확하거나 오탐으로 판단됨
-
-## 출력 형식 (JSON만 출력)
-{
-  "risk_level": "ABNORMAL|SUSPICIOUS",
-  "reason": "판단 이유를 한 문장으로 작성 (한국어)"
-}
-
-JSON만 출력하세요."""
+    ## 입력 정보
+    - 1FPS로 캡처된 8개의 연속 프레임이 시간순으로 제공됩니다.
+    - 정밀 분석(precision_analysis) 결과가 함께 제공됩니다:
+      - risk_level: 위험도 (ABNORMAL/SUSPICIOUS)
+      - event_type: 이벤트 유형 (ASSAULT/BURGLARY/DUMP/SWOON/VANDALISM)
+      - summary: 상황 요약 (인상착의 포함)
+    
+    ## 검증 지침
+    1. 제공된 8개의 이미지를 직접 확인하세요.
+    2. 정밀 분석의 summary에 기술된 내용이 이미지와 일치하는지 검증하세요:
+       - 인상착의 (옷 색상, 스타일 등)가 실제 이미지와 맞는가?
+       - 행동 설명이 이미지에서 확인되는가?
+    3. event_type이 실제 상황과 일치하는지 확인하세요.
+    
+    ## 판단 기준
+    - **ABNORMAL (이상 확정)**: 
+      - 정밀 분석 결과가 이미지와 일치함
+      - 명확한 이상 행동이 이미지에서 확인됨
+    - **SUSPICIOUS (의심으로 하향)**: 
+      - 정밀 분석 결과가 이미지와 불일치함
+      - 이상 행동이 불명확하거나 오탐으로 판단됨
+    
+    ## 출력 형식 (JSON만 출력)
+    {
+      "risk_level": "ABNORMAL|SUSPICIOUS",
+      "reason": "판단 이유를 한 문장으로 작성 (한국어)"
+    }
+    
+    JSON만 출력하세요."""
 
     # Verification 재시도 설정
     verification_max_retries: int = 3

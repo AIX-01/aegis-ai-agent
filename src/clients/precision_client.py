@@ -154,12 +154,49 @@ class PrecisionClient:
         vlm_risk = vlm_metadata.get("risk_level", "")
         vlm_event = vlm_metadata.get("event_type", "")
 
+        # 카메라 정보
+        camera_name = task_metadata.get("camera_name", camera_id)
+        camera_location = task_metadata.get("camera_location", "")
+
+        # 프레임별 타임스탬프 정보 구성
+        frame_timestamps = task_metadata.get("frame_timestamps", [])
+        frame_time_info = ""
+        if frame_timestamps and len(frame_timestamps) > 0:
+            first_ts = frame_timestamps[0]
+            frame_lines = []
+            for i, ts in enumerate(frame_timestamps):
+                if hasattr(ts, 'strftime'):
+                    time_str = ts.strftime("%H:%M:%S")
+                else:
+                    time_str = str(ts)
+                # 첫 프레임 기준 경과 시간 계산
+                if i == 0:
+                    elapsed = "0.0초"
+                elif hasattr(ts, 'timestamp') and hasattr(first_ts, 'timestamp'):
+                    elapsed = f"{ts.timestamp() - first_ts.timestamp():.1f}초"
+                else:
+                    elapsed = f"{i}초"
+                frame_lines.append(f"- Frame {i+1}: {time_str} (경과: {elapsed})")
+            frame_time_info = "\n".join(frame_lines)
+        else:
+            frame_time_info = "- 타임스탬프 정보 없음"
+
         context = f"""
-## 입력 정보
+## 카메라 정보
 - 카메라 ID: {camera_id}
-- 1차 분석 결과: {vlm_risk} / {vlm_event}
+- 카메라 이름: {camera_name}
+- 카메라 위치: {camera_location}
+
+## 1차 VLM 분석 결과
+- 위험도: {vlm_risk}
+- 이벤트 유형: {vlm_event}
+
+## 시간 정보
 - 발생 시각: {task_metadata.get('occurred_at', 'N/A')}
 - 분석 구간: {task_metadata.get('window_start', 0)} ~ {task_metadata.get('window_end', 0)}
+
+## 프레임별 시간 정보
+{frame_time_info}
 """
         return self.system_prompt + context
 

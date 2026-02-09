@@ -711,16 +711,16 @@ graph TD
         Start("13. Start<br>(with event_id)")
         
         Start --> N_Precise["14. 정밀 분석 LLM <br>(precision_analysis)"]
-        N_Precise --> N_Verify["15. 검증<br>(verification)"]
+        N_Precise --> N_Verify["15. 검증<br>(verification)<br>OpenAI Vision으로<br>정밀분석 결과 검증"]
         N_Verify --> N_Update["16. 백엔드 갱신<br>(update_backend)"]
         N_Update --> Router2{"17. 검증 결과<br>(verification_router)"}
         
-        Router2 -- "이상" --> N_Embed["18. 임베딩 저장<br>(store_embedding)"]
-        Router2 -- "의심" --> EndGraph((End))
+        Router2 -- "ABNORMAL<br>(검증 통과)" --> N_Embed["18. 임베딩 저장<br>(store_embedding)"]
+        Router2 -- "SUSPICIOUS<br>(검증 실패)" --> EndGraph((End))
         
         N_Embed --> EndGraph
         
-        Router2 -- "이상" --> SubAgent
+        Router2 -- "ABNORMAL<br>(검증 통과)" --> SubAgent
         
         subgraph SubAgent["18. response_agent (ReAct Agent 서브그래프)"]
             direction TB
@@ -740,6 +740,188 @@ graph TD
 
     Clip ==> Start
 ```
+
+### 15. 검증(verification) 노드 상세
+
+**역할**: 정밀 분석 결과가 실제 이미지와 일치하는지 OpenAI Vision API로 검증
+
+---
+
+#### 검증에 사용되는 정보
+
+| 정보 | 출처 | 용도 |
+|------|------|------|
+| 8개 이미지 | frames | 실제 상황 확인 |
+| 카메라 이름/위치 | camera_name, camera_location | 장소 맥락 파악 |
+| 발생 시각 | occurred_at | 시간 맥락 파악 |
+| 1차 VLM 결과 | vlm_result | 정밀 분석과 비교 |
+| 2차 정밀 분석 결과 | precision_result | 검증 대상 |
+
+---
+
+#### 판정 기준
+
+1. **이미지 확인**: 8개 이미지에서 이상 상황이 실제로 보이는지 확인
+2. **장소 맥락**: 카메라 위치를 고려하여 해당 장소에서 발생 가능한 상황인지 판단
+3. **VLM vs 정밀분석 비교**: 1차 VLM과 2차 정밀분석 결과가 다르면 이미지를 보고 판단
+4. **요약 검증**: summary 내용이 이미지에서 실제로 확인되는지 검증
+
+---
+
+#### 검증 결과에 따른 동작
+
+**① 정확한 분석 (검증 통과)**
+```
+이미지: 폭행 장면 있음
+정밀 분석: ASSAULT (ABNORMAL)
+    ↓
+검증 결과: ✅ ABNORMAL 유지
+    ↓
+이후 흐름: response_agent → store_embedding → END
+```
+
+**② 이벤트 유형만 틀림 (유형 수정)**
+```
+이미지: 절도 장면 있음 (폭행 아님)
+정밀 분석: ASSAULT (ABNORMAL)
+    ↓
+검증 결과: ✅ ABNORMAL 유지 + event_type → BURGLARY로 수정
+    ↓
+이후 흐름: response_agent → store_embedding → END
+```
+
+**③ 오탐지 (이상 없음)**
+```
+이미지: 이상 상황 없음
+정밀 분석: ASSAULT (ABNORMAL)
+    ↓
+검증 결과: ❌ SUSPICIOUS로 변경
+    ↓
+이후 흐름: 바로 END (대응 조치 없음)
+```
+
+---
+
+#### 검증 결과 JSON 형식
+
+```json
+{
+  "risk_level": "ABNORMAL",
+  "event_type": "ASSAULT",
+  "reason": "이미지에서 폭행 상황이 명확히 확인됨"
+}
+```
+
+---
+
+**검증 실패 시 (SUSPICIOUS):**
+- 대응 조치(response_agent) 실행 안 함
+- 임베딩 저장(store_embedding) 실행 안 함
+- 16번에서 백엔드에 SUSPICIOUS로 갱신 후 종료
+
+---
+
+### 검증 시나리오 예시
+
+> **참고**: 검증 노드는 이미지에서 **명백한 이상 상황이 보이는지** 확인하는 역할입니다.
+> "폭행 vs 절도" 같은 세부 구분은 어렵고, **"이상 있음/없음"** 수준의 판단이 현실적입니다.
+
+#### 시나리오 1: 이상 상황 확인됨 (ABNORMAL 유지)
+
+**입력 데이터:**
+```
+카메라 위치: 1층 로비
+정밀 분석: ASSAULT (ABNORMAL)
+요약: "두 남성이 격렬하게 몸싸움 중"
+```
+
+**OpenAI 응답:**
+```json
+{
+  "risk_level": "ABNORMAL",
+  "event_type": "ASSAULT",
+  "reason": "이미지에서 두 사람이 격렬하게 충돌하는 장면이 확인됨"
+}
+```
+
+**결과:** ✅ ABNORMAL 유지 → response_agent 실행
+
+---
+
+#### 시나리오 2: 이상 상황 없음 (오탐지 → SUSPICIOUS)
+
+**입력 데이터:**
+```
+카메라 위치: 2층 복도
+정밀 분석: SWOON (ABNORMAL)
+요약: "사람이 바닥에 쓰러져 있음"
+```
+
+**OpenAI 응답:**
+```json
+{
+  "risk_level": "SUSPICIOUS",
+  "event_type": "SWOON",
+  "reason": "이미지에서 쓰러진 사람이 확인되지 않음. 정상적인 보행 중인 것으로 보임"
+}
+```
+
+**결과:** ❌ SUSPICIOUS로 변경 → 바로 END (대응 조치 없음)
+
+---
+
+#### 시나리오 3: 이상은 있지만 유형이 다름 (event_type 수정)
+
+**입력 데이터:**
+```
+카메라 위치: 주차장
+정밀 분석: ASSAULT (ABNORMAL)
+요약: "두 사람이 격렬하게 움직이고 있음"
+```
+
+**OpenAI 응답:**
+```json
+{
+  "risk_level": "ABNORMAL",
+  "event_type": "VANDALISM",
+  "reason": "폭행이 아닌 차량 기물파손 행위로 보임. 한 명이 차량을 발로 차는 장면 확인"
+}
+```
+
+**결과:** ✅ ABNORMAL 유지 + event_type → VANDALISM → response_agent 실행
+
+---
+
+### 검증의 한계
+
+| 구분 가능 | 구분 어려움 |
+|----------|-----------|
+| 사람 있음/없음 | 폭행 vs 절도 |
+| 쓰러짐/서있음 | 싸움 vs 장난 |
+| 격렬한 움직임/정상 | 실신 vs 휴식 |
+| 물건 던짐/정상 | 투기 vs 분리수거 |
+
+> 검증은 **"정밀 분석이 완전히 틀렸는지"** 확인하는 안전장치 역할입니다.
+> 세부적인 이벤트 유형 수정보다는 **오탐지 걸러내기**가 주 목적입니다.
+
+---
+
+### 검증 정확도 향상 방향성
+
+현재 정적 이미지 8장으로는 **동작의 의도**를 정확히 파악하기 어렵습니다.
+검증 정확도를 높이기 위한 방향성입니다.
+
+| 방법 | 설명 | 상태 |
+|------|------|------|
+| **프레임별 타임스탬프** | 각 프레임의 시간 간격을 프롬프트에 포함 (예: Frame1=0초, Frame2=1초...) | ✅ 구현됨 |
+| **영상 클립 분석** | 8장 이미지 대신 30초 영상 클립을 GPT-4o로 분석 | 미구현 |
+| **프레임 수 증가** | 8장 → 16~32장으로 늘려 움직임 흐름 파악 | 미구현 |
+| **다중 모델 검증** | 여러 VLM 모델로 검증 후 다수결 | 미구현 |
+| **특화 모델 추가** | 폭행/절도 등 행동 인식 특화 모델 사용 | 미구현 |
+
+> 현재는 **오탐지 필터링** 수준의 검증만 수행합니다.
+> 세부적인 이벤트 유형 구분이 필요하면 위 방향성을 검토하세요.
+
 
 ### 전체 흐름
 
