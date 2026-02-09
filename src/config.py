@@ -15,8 +15,7 @@ load_dotenv()
 class Config:
     """
     AEGIS AI Agent의 모든 설정을 관리하는 중앙 클래스입니다.
-    실제 서버 주소를 한 번만 설정해두면, mock_mode 값만 변경하여
-    테스트 모드와 실제 운영 모드를 쉽게 전환할 수 있습니다.
+    개별 real_* 플래그로 컴포넌트별 실제/Mock 서버를 전환합니다.
     """
 
     # ===================================================================
@@ -39,18 +38,14 @@ class Config:
     _real_backend_clip_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/clip"
 
     # ===================================================================
-    # >> 2. 모드 설정 (이 값만 True/False로 변경하여 모드를 전환하세요)
+    # >> 2. 모드 설정 (컴포넌트별 True/False로 전환)
     # ===================================================================
-    # True: 내장된 모의 서버 사용 (로컬 테스트용)
-    # False: 위에 설정한 실제 서버 주소 사용 (운영용)
-    mock_mode: bool = True
-    
     # 개별 컴포넌트의 실제 서버 사용 여부 (기본값: False -> Mock 사용)
-    # app.py에서 CLI 인자에 따라 동적으로 설정됩니다.
+    # - 여기서 True로 설정하면 CLI 플래그 없이도 항상 실제 서버 사용
+    # - CLI 플래그(--real-vlm 등)는 False → True 전환만 가능 (True → False 불가)
     real_vlm: bool = False
     real_precision: bool = False
     real_backend: bool = False
-    real_s3: bool = False # S3 실제 서버 사용 여부 추가
 
     # ===================================================================
     # >> 3. 활성 엔드포인트 (수정 금지 - __post_init__에서 자동 설정됨)
@@ -70,7 +65,7 @@ class Config:
     agent_api_port: int = 8000
 
     # =========================================
-    # 모의 서버 포트 설정 (mock_mode=True일 때 사용)
+    # 모의 서버 포트 설정 (real_*=False인 컴포넌트에 사용)
     # =========================================
     mock_vlm_port: int = 8001
     mock_precision_port: int = 8002
@@ -225,7 +220,7 @@ JSON만 출력하세요."""
     def __post_init__(self):
         """
         초기화 후 실행되는 로직.
-        mock_mode 및 개별 real_* 플래그 값에 따라 활성 엔드포인트를 동적으로 설정합니다.
+        개별 real_* 플래그 값에 따라 활성 엔드포인트를 동적으로 설정합니다.
         """
         # VLM 엔드포인트 설정
         if self.real_vlm:
