@@ -5,13 +5,16 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import time
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 # LangGraph 빌더 및 핵심 클라이언트 import
-from ..graph.analysis_graph import build_graph
+from ..graph.analysis_graph import build_graph, set_redis_manager
 from ..clients.vlm_client import VLMClient
 from ..clients.backend_client import BackendClient
 from ..core.muxer import mux_packets_to_mp4
+
+if TYPE_CHECKING:
+    from .redis_manager import RedisManager
 
 
 class ConsumerPool:
@@ -23,19 +26,25 @@ class ConsumerPool:
         self,
         config,
         queue_manager,
-        packet_buffers=None, # 카메라별 영상 패킷 버퍼
-        source_streams=None  # 카메라별 원본 RTSP 스트림 정보
+        packet_buffers=None,
+        source_streams=None,
+        redis_manager: "RedisManager" = None
     ):
         """컨슈머 풀 초기화"""
         self.config = config
         self.queue_manager = queue_manager
         self.packet_buffers = packet_buffers if packet_buffers is not None else {}
         self.source_streams = source_streams if source_streams is not None else {}
+        self.redis_manager = redis_manager
         self.logger = logging.getLogger("aegis-agent.consumer")
 
         # 분석용 클라이언트 초기화
         self.vlm_client = VLMClient(config)
         self.backend_client = BackendClient(config)
+
+        # action_node가 사용할 RedisManager 설정
+        if redis_manager:
+            set_redis_manager(redis_manager)
 
         # LangGraph 워크플로우 빌드 (정밀 분석용)
         self.logger.info("LangGraph 워크플로우를 빌드합니다...")

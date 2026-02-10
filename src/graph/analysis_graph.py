@@ -8,9 +8,26 @@ from .nodes import (
     update_backend_node,
     generate_report_node
 )
+from .nodes.action import set_action_dependencies
 from .edges import analysis_router, verification_router
 from ..clients import VLMClient, PrecisionClient, BackendClient, VerificationClient
+from ..clients.vector_store_client import VectorStoreClient
 from ..config import Config
+
+# RedisManager는 순환 참조 방지를 위해 TYPE_CHECKING으로 처리
+from typing import TYPE_CHECKING, Optional
+if TYPE_CHECKING:
+    from ..core.redis_manager import RedisManager
+
+# 전역 RedisManager 참조 (app.py에서 주입)
+_redis_manager: Optional["RedisManager"] = None
+
+
+def set_redis_manager(redis_manager: "RedisManager"):
+    """RedisManager 인스턴스를 설정합니다."""
+    global _redis_manager
+    _redis_manager = redis_manager
+
 
 def build_graph(config: Config):
     """
@@ -43,6 +60,11 @@ def build_graph(config: Config):
     verification_client = VerificationClient(config)
     precision_client = PrecisionClient(config)
     backend_client = BackendClient(config)
+    vector_client = VectorStoreClient(config)
+
+    # action_node 의존성 주입
+    if _redis_manager:
+        set_action_dependencies(config, vector_client, _redis_manager)
 
     # 노드에 클라이언트 바인딩
     verification = functools.partial(verification_node, verification_client=verification_client)

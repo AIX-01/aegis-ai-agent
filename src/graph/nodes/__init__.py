@@ -11,7 +11,7 @@ Graph Nodes 패키지: LangGraph 분석/추론 노드
 
 from .verification import verification_node
 from .precision_analysis import precision_analysis_node
-from .action import action_node
+from .action import action_node, set_action_dependencies
 from .update_backend import update_backend_node
 from .generate_report import generate_report_node
 
@@ -20,5 +20,6 @@ __all__ = [
     "precision_analysis_node",
     "update_backend_node",
     "action_node",
+    "set_action_dependencies",
     "generate_report_node",
 ]

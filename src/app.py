@@ -59,19 +59,20 @@ class AegisAgent:
         self.packet_buffers = {}
         self.source_streams = {}
 
-        # LangGraph 기반 컨슈머 풀
-        self.consumer_pool = ConsumerPool(
-            config=config,
-            queue_manager=self.queue_manager,
-            packet_buffers=self.packet_buffers,
-            source_streams=self.source_streams
-        )
-
-        # 동적 스트림 설정을 위한 Redis 매니저
+        # 동적 스트림 설정을 위한 Redis 매니저 (ConsumerPool보다 먼저 생성)
         self.redis_manager = RedisManager(config, self._on_camera_update)
 
         # 액션 업데이트 콜백 등록
         self.redis_manager.set_action_update_callback(self._on_action_update)
+
+        # LangGraph 기반 컨슈머 풀 (redis_manager 전달)
+        self.consumer_pool = ConsumerPool(
+            config=config,
+            queue_manager=self.queue_manager,
+            packet_buffers=self.packet_buffers,
+            source_streams=self.source_streams,
+            redis_manager=self.redis_manager
+        )
 
         # 프로듀서 관리 (카메라 ID를 키로 사용)
         self.producers: Dict[str, FrameProducer] = {}

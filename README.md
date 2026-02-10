@@ -58,10 +58,10 @@ src/
 │   ├── state.py                # AnalysisState TypedDict 정의
 │   ├── nodes/
 │   │   ├── __init__.py
-│   │   ├── verification.py     # 검증 노드 (미구현 - 임시 ABNORMAL 반환)
+│   │   ├── verification.py     # 검증 노드 (OpenAI Vision API)
 │   │   ├── precision_analysis.py # 정밀 분석 LLM 호출
 │   │   ├── update_backend.py   # 백엔드 이벤트 갱신
-│   │   ├── action.py           # 대응 조치 결정 (미구현)
+│   │   ├── action.py           # 대응 조치 Agent (ReAct + 동적 Tool)
 │   │   └── generate_report.py  # 보고서 생성 (미구현)
 │   └── edges/
 │       ├── __init__.py
@@ -72,9 +72,10 @@ src/
 │   ├── indexer.py              # 문서 인덱싱 (미구현)
 │   └── retriever_factory.py    # Retriever 팩토리 (미구현)
 │
-└── tools/                      # 분석 도구 (미구현)
+└── tools/                      # LangGraph Agent 도구
     ├── __init__.py
-    └── search_tools.py         # 매뉴얼/사례 검색 (미구현)
+    ├── manual_tool.py          # 매뉴얼 RAG 검색 도구 (Qdrant)
+    └── dynamic_tools.py        # Redis 액션 → 동적 Tool 생성
 ```
 
 ---
@@ -587,10 +588,15 @@ graph TD
 
 | 파일 | 함수/클래스 | 현재 동작 |
 |------|-------------|----------|
-| `tools/search_tools.py` | `search_manual()` | 하드코딩 문자열 반환 |
-| `tools/search_tools.py` | `search_past_cases()` | 하드코딩 문자열 반환 |
-| `graph/nodes/action.py` | `action_node()` | 빈 리스트 반환 |
 | `graph/nodes/generate_report.py` | `generate_report_node()` | "Not Implemented" 반환 |
+
+### 구현 완료
+
+| 파일 | 함수/클래스 | 설명 |
+|------|-------------|------|
+| `tools/manual_tool.py` | `search_manual()` | Qdrant 기반 매뉴얼 RAG 검색 |
+| `tools/dynamic_tools.py` | `create_dynamic_tools()` | Redis 액션을 동적 LangChain Tool로 변환 |
+| `graph/nodes/action.py` | `action_node()` | ReAct Agent로 대응 조치 실행 |
 
 ### 논리적 불일치
 
