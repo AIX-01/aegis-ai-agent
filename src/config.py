@@ -119,7 +119,9 @@ class Config:
     redis_password: Optional[str] = None
     redis_analysis_cameras_key: str = "analysis:cameras"
     redis_update_channel: str = "camera:analysis:update"
-    
+    redis_actions_key: str = "aegis:actions"
+    redis_action_update_channel: str = "aegis:action:update"
+
     # =========================================
     # 로깅 설정
     # =========================================

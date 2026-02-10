@@ -29,7 +29,12 @@ class RedisManager:
         self.redis_db = getattr(config, 'redis_db', 0)
         self.analysis_cameras_key = getattr(config, 'redis_analysis_cameras_key', 'analysis:cameras')
         self.update_channel = getattr(config, 'redis_update_channel', 'camera:analysis:update')
+        self.actions_key = getattr(config, 'redis_actions_key', 'aegis:actions')
+        self.action_update_channel = getattr(config, 'redis_action_update_channel', 'aegis:action:update')
         self.update_callback = update_callback
+
+        # 액션 콜백 (선택적)
+        self.action_update_callback = None
 
         self.redis_client: redis.Redis = None
         self.shutdown_event = threading.Event()
@@ -117,6 +122,34 @@ class RedisManager:
             self.logger.error(f"Redis에서 카메라 정보를 가져오는 중 오류 발생: {e}", exc_info=True)
             return []
 
+    def get_actions(self) -> List[Dict]:
+        """
+        Redis에서 enabled=true인 액션 목록을 가져옵니다.
+
+        Returns:
+            액션 정보를 담은 딕셔너리 목록
+        """
+        if not self.redis_client:
+            self.logger.warning("Redis에 연결되지 않았습니다. 액션 정보를 가져올 수 없습니다.")
+            return []
+        try:
+            actions_json = self.redis_client.get(self.actions_key)
+            if not actions_json:
+                self.logger.debug(f"Redis 키 '{self.actions_key}'가 비어있습니다.")
+                return []
+
+            actions = json.loads(actions_json)
+            self.logger.info(f"Redis에서 {len(actions)}개의 액션 정보를 가져왔습니다.")
+            return actions
+
+        except Exception as e:
+            self.logger.error(f"Redis에서 액션 정보를 가져오는 중 오류 발생: {e}", exc_info=True)
+            return []
+
+    def set_action_update_callback(self, callback: Callable[[], None]):
+        """액션 업데이트 콜백을 설정합니다."""
+        self.action_update_callback = callback
+
     def _pubsub_loop(self):
         """
         Pub/Sub 리스너 스레드의 메인 루프입니다.
@@ -131,18 +164,22 @@ class RedisManager:
 
             try:
                 pubsub = self.redis_client.pubsub()
-                pubsub.subscribe(self.update_channel)
-                self.logger.info(f"업데이트를 위해 Redis 채널 '{self.update_channel}'을 구독했습니다.")
+                pubsub.subscribe(self.update_channel, self.action_update_channel)
+                self.logger.info(f"Redis 채널 구독: '{self.update_channel}', '{self.action_update_channel}'")
 
                 for message in pubsub.listen():
                     if self.shutdown_event.is_set():
                         break
                     if message['type'] == 'message':
-                        self.logger.info(
-                            f"채널 '{self.update_channel}'에서 업데이트 알림을 수신했습니다. "
-                            f"메시지: '{message.get('data')}'"
-                        )
-                        self.update_callback()
+                        channel = message.get('channel', '')
+                        self.logger.info(f"채널 '{channel}'에서 업데이트 알림 수신: '{message.get('data')}'")
+
+                        # 카메라 업데이트
+                        if channel == self.update_channel:
+                            self.update_callback()
+                        # 액션 업데이트
+                        elif channel == self.action_update_channel and self.action_update_callback:
+                            self.action_update_callback()
 
             except redis.exceptions.ConnectionError:
                 self.logger.error("Pub/Sub 루프에서 Redis 연결이 끊어졌습니다. 재연결을 시도합니다...")
