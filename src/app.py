@@ -10,6 +10,8 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Optional as OptionalType
 
 from .config import Config
 from .utils import setup_logging
@@ -19,6 +21,20 @@ from .core.producer import FrameProducer
 from .core.consumer import ConsumerPool
 from .core.redis_manager import RedisManager
 from .api.mock_server import MockVLMServer, MockPrecisionServer, MockBackendServer
+from .clients.vector_store_client import VectorStoreClient
+
+
+# 매뉴얼 임베딩 요청 DTO
+class ManualData(BaseModel):
+    id: str
+    name: str
+    content: str
+    enabled: bool
+
+
+class ManualEmbeddingRequest(BaseModel):
+    action: str  # "create" | "update" | "delete"
+    manual: ManualData
 
 
 class AegisAgent:
@@ -246,6 +262,47 @@ async def get_agent_status():
     if not agent:
         raise HTTPException(status_code=503, detail="Agent not initialized")
     return agent.get_status()
+
+
+@app.post("/api/manuals/embedding")
+async def sync_manual_embedding(request: ManualEmbeddingRequest):
+    """
+    매뉴얼 임베딩 동기화 (Spring Boot에서 호출)
+    - create/update: 임베딩 생성 또는 메타데이터 업데이트
+    - delete: Qdrant에서 포인트 삭제
+    """
+    if not agent:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+
+    try:
+        vector_client = VectorStoreClient(agent.config)
+        manual = request.manual
+
+        if request.action == "delete":
+            # Qdrant에서 포인트 삭제
+            vector_client.delete_document("manuals", manual.id)
+            return {"success": True, "message": f"Manual {manual.id} deleted from Qdrant"}
+
+        elif request.action in ("create", "update"):
+            # 임베딩 생성/업데이트 (enabled 메타데이터 포함)
+            vector_client.add_document(
+                collection_name="manuals",
+                doc_id=manual.id,
+                data={
+                    "id": manual.id,
+                    "name": manual.name,
+                    "content": manual.content,
+                    "enabled": manual.enabled
+                },
+                text_field="content"
+            )
+            return {"success": True, "message": f"Manual {manual.id} embedded successfully"}
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid action: {request.action}")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def parse_args():
