@@ -100,6 +100,14 @@ src/
 |--------|------|------|
 | GET | `/health` | 헬스 체크 |
 | GET | `/status` | 에이전트 상태 조회 |
+| POST | `/api/manuals/embedding` | 매뉴얼 임베딩 동기화 (Spring Boot에서 호출) |
+
+**Redis Pub/Sub 콜백:**
+
+| 채널 | 콜백 | 설명 |
+|------|------|------|
+| `camera:analysis:update` | `_on_camera_update()` | 카메라 목록 변경 시 프로듀서 재구성 |
+| `aegis:action:update` | `_on_action_update()` | 액션 목록 변경 시 로깅 출력 |
 
 ---
 
@@ -252,10 +260,21 @@ RTSP 스트림을 수신하는 스레드입니다.
 
 ### core/redis_manager.py - RedisManager
 
-Redis 기반 카메라 동기화를 담당합니다.
+Redis 기반 카메라/액션 동기화를 담당합니다.
 
-- `get_analysis_cameras()`: analysis:cameras 키에서 카메라 목록 조회
-- `_pubsub_loop()`: camera:analysis:update 채널 구독
+**주요 메서드:**
+| 메서드 | 설명 |
+|--------|------|
+| `get_analysis_cameras()` | `analysis:cameras` 키에서 카메라 목록 조회 |
+| `get_actions()` | `aegis:actions` 키에서 활성화된 액션 목록 조회 |
+| `set_action_update_callback()` | 액션 업데이트 콜백 등록 |
+| `_pubsub_loop()` | 카메라/액션 채널 구독 및 콜백 트리거 |
+
+**구독 채널:**
+| 채널 | 용도 |
+|------|------|
+| `camera:analysis:update` | 카메라 목록 변경 알림 |
+| `aegis:action:update` | 액션 목록 변경 알림 |
 
 ---
 

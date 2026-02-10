@@ -68,7 +68,10 @@ class AegisAgent:
         )
 
         # 동적 스트림 설정을 위한 Redis 매니저
-        self.redis_manager = RedisManager(config, self._update_producers)
+        self.redis_manager = RedisManager(config, self._on_camera_update)
+
+        # 액션 업데이트 콜백 등록
+        self.redis_manager.set_action_update_callback(self._on_action_update)
 
         # 프로듀서 관리 (카메라 ID를 키로 사용)
         self.producers: Dict[str, FrameProducer] = {}
@@ -95,6 +98,13 @@ class AegisAgent:
 
         self.logger.info("Redis에서 초기 카메라 설정을 수행합니다...")
         self._update_producers()
+
+        # 초기 액션 목록 로깅
+        self.logger.info("Redis에서 초기 액션 목록을 로드합니다...")
+        actions = self.redis_manager.get_actions()
+        self.logger.info(f"활성화된 액션: {len(actions)}개")
+        for action in actions:
+            self.logger.info(f"  - {action.get('name', 'unknown')}: {action.get('description', '')}")
 
         self.logger.info("시스템이 시작되었습니다.")
 
@@ -129,6 +139,29 @@ class AegisAgent:
             self.logger.info("실제 백엔드 서버를 사용합니다. (Mock 백엔드 서버 실행 안 함)")
         
         time.sleep(2) # 서버가 시작될 때까지 잠시 대기
+
+    def _on_camera_update(self):
+        """
+        Redis 카메라 목록 업데이트 시 호출되는 콜백
+        """
+        self.logger.info("=" * 60)
+        self.logger.info("[Redis Pub/Sub] 카메라 목록 업데이트 알림 수신")
+        self.logger.info("=" * 60)
+        self._update_producers()
+
+    def _on_action_update(self):
+        """
+        Redis 액션 목록 업데이트 시 호출되는 콜백
+        """
+        self.logger.info("=" * 60)
+        self.logger.info("[Redis Pub/Sub] 액션 목록 업데이트 알림 수신")
+        self.logger.info("=" * 60)
+
+        # 액션 목록 갱신 및 로깅
+        actions = self.redis_manager.get_actions()
+        self.logger.info(f"Redis에서 {len(actions)}개의 활성화된 액션을 가져왔습니다.")
+        for action in actions:
+            self.logger.info(f"  - {action.get('name', 'unknown')}: {action.get('description', '')}")
 
     def _update_producers(self):
         """
@@ -282,6 +315,14 @@ async def sync_manual_embedding(request: ManualEmbeddingRequest):
     if not agent:
         raise HTTPException(status_code=503, detail="Agent not initialized")
 
+    logger = logging.getLogger("aegis-agent")
+    logger.info("=" * 60)
+    logger.info(f"[HTTP API] 매뉴얼 임베딩 요청 수신: action={request.action}")
+    logger.info(f"  - ID: {request.manual.id}")
+    logger.info(f"  - 이름: {request.manual.name}")
+    logger.info(f"  - 활성화: {request.manual.enabled}")
+    logger.info("=" * 60)
+
     try:
         vector_client = VectorStoreClient(agent.config)
         manual = request.manual
@@ -290,6 +331,7 @@ async def sync_manual_embedding(request: ManualEmbeddingRequest):
         if request.action == "delete":
             # Qdrant에서 포인트 삭제
             vector_client.delete_document("manuals", manual.id)
+            logger.info(f"[매뉴얼] Qdrant에서 삭제 완료: {manual.name} ({manual.id})")
             return {"success": True, "message": f"Manual {manual.id} deleted from Qdrant"}
 
         elif request.action in ("create", "update"):
@@ -305,6 +347,8 @@ async def sync_manual_embedding(request: ManualEmbeddingRequest):
                 },
                 text_field="content"
             )
+            action_text = "생성" if request.action == "create" else "업데이트"
+            logger.info(f"[매뉴얼] Qdrant 임베딩 {action_text} 완료: {manual.name} ({manual.id})")
             return {"success": True, "message": f"Manual {manual.id} embedded successfully"}
 
         else:
