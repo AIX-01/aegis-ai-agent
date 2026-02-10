@@ -40,7 +40,8 @@ src/
 │   ├── precision_client.py     # 정밀 분석 LLM 클라이언트
 │   ├── vlm_client.py           # VLM 분석 클라이언트
 │   ├── vector_store_client.py  # Qdrant Vector DB 클라이언트
-│   └── openai_client.py        # OpenAI API 클라이언트 (Vision, Embedding)
+│   ├── verification_client.py  # 검증 클라이언트 (OpenAI Vision API 기반)
+│   └── openai_client.py        # OpenAI API 클라이언트 (Vision, Embedding, Chat)
 │
 ├── core/
 │   ├── __init__.py
@@ -58,10 +59,10 @@ src/
 │   ├── state.py                # AnalysisState TypedDict 정의
 │   ├── nodes/
 │   │   ├── __init__.py
-│   │   ├── verification.py     # 정밀 분석 결과 검증
+│   │   ├── verification.py     # 정밀 분석 결과 검증 (VerificationClient 사용)
 │   │   ├── precision_analysis.py # 정밀 분석 LLM 호출
 │   │   ├── update_backend.py   # 백엔드 이벤트 갱신
-│   │   └── store_embedding.py  # 이벤트 임베딩 저장 (response_agent와 병렬)
+│   │   └── store_embedding.py  # 이벤트 임베딩 저장 (response_agent 완료 후 순차 실행)
 │   ├── subgraphs/
 │   │   ├── __init__.py
 │   │   └── response_agent.py   # ReAct Agent (대응 조치 + 보고서 생성 + 업로드)
@@ -73,10 +74,11 @@ src/
 │   ├── __init__.py
 │   └── report_generator.py     # 보고서 생성 서비스 (HTML, PDF, DOCX, PPTX)
 │
-└── tools/                      # 분석 도구
+└── tools/                      # LangChain 도구 및 유틸리티
     ├── __init__.py
     ├── embedding_tools.py      # 임베딩 도구 (텍스트→벡터 변환)
-    └── search_tools.py         # 매뉴얼/사례 검색 (VectorStoreClient 사용)
+    ├── search_tools.py         # 매뉴얼/사례 검색 (VectorStoreClient 사용)
+    └── response_tools.py       # 대응 도구 (LangChain Tool - response_agent용)
 
 templates/
 └── reports/                    # 보고서 템플릿
@@ -333,30 +335,78 @@ VLM 서버와 통신합니다.
 
 ---
 
+### clients/verification_client.py - VerificationClient
+
+정밀 분석 결과를 OpenAI Vision API로 검증합니다.
+
+**verify() 메서드:**
+- 입력: camera_id, frames (8개 JPEG), summary, event_type, camera_name, camera_location
+- 출력: `{"risk_level": str, "event_type": str, "reason": str}`
+
+**검증 프로세스:**
+1. 8개 이미지와 정밀 분석 결과를 OpenAI Vision API에 전송
+2. 이미지에서 실제로 이상 상황이 보이는지 확인
+3. ABNORMAL 유지 또는 SUSPICIOUS로 변경 판정
+
+**설정:**
+- `config.openai_chat_model`: 사용 모델 (기본: gpt-4.1-mini)
+- `config.verification_system_prompt`: 검증 시스템 프롬프트
+- `config.verification_max_retries`: 최대 재시도 횟수
+- `config.verification_retry_delay`: 재시도 간격
+
+---
+
 ### graph/state.py - AnalysisState
 
 LangGraph 파이프라인의 상태 정의입니다.
 
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| camera_id | str | 카메라 ID |
-| camera_name | str | 카메라 이름 |
-| camera_location | str | 카메라 위치 |
-| occurred_at | datetime | 이벤트 발생 시각 |
-| frames | List[bytes] | 프레임 데이터 |
-| event_id | str | 백엔드 이벤트 ID |
-| vlm_result | Dict | VLM 분석 결과 |
-| precision_result | Dict | 정밀 분석 결과 |
-| risk_level | RiskLevel | NORMAL/SUSPICIOUS/ABNORMAL |
-| event_type | EventType | 이벤트 유형 |
-| summary | str | 요약 |
-| risk_score | float | 위험도 점수 |
-| report | str | 최종 보고서 |
-| actions | list | 대응 조치 |
-| rag_references | list | RAG 참조 문서 |
-| embedding_stored | bool | 임베딩 저장 여부 |
-| report_updated | bool | 보고서 백엔드 갱신 여부 |
-| errors | List[str] | 오류 목록 |
+**초기 입력 (Consumer에서 주입):**
+
+| 필드 | 타입 | 태그 | 설명 |
+|------|------|------|------|
+| camera_id | str | [M/S] | 카메라 ID |
+| camera_name | str | [M/S] | 카메라 이름 |
+| camera_location | str | [M/S] | 카메라 위치 |
+| occurred_at | datetime | [M/S] | 분석 윈도우 시작 시점 |
+| frames | List[bytes] | [M] | JPEG 이미지 바이트 리스트 |
+| frame_timestamps | List[datetime] | [M] | 각 프레임의 타임스탬프 |
+| event_id | str | [M/S] | 백엔드에서 생성된 이벤트 ID |
+| vlm_result | Dict | [M] | 1차 VLM 분석 원본 결과 |
+| window_start | int/str | [M] | 윈도우 시작 시간 |
+| window_end | int/str | [M] | 윈도우 종료 시간 |
+
+**워크플로우 진행 중 생성:**
+
+| 필드 | 타입 | 태그 | 설명 |
+|------|------|------|------|
+| verification_result | Dict | [M] | SUSPICIOUS 검증 결과 |
+| precision_result | Dict | [M] | 2차 정밀 분석 원본 결과 |
+
+**최종 분석 결과:**
+
+| 필드 | 타입 | 태그 | 설명 |
+|------|------|------|------|
+| risk_level | RiskLevel | [M/S] | NORMAL/SUSPICIOUS/ABNORMAL |
+| event_type | EventType | [M/S] | ASSAULT/BURGLARY/DUMP/SWOON/VANDALISM |
+| summary | str | [M/S] | 상황 요약 텍스트 |
+| risk_score | float | [M/S] | 위험 점수 (0.0 ~ 1.0) |
+| report | Dict | [S→M] | 보고서 {content, files, generated_at} |
+
+**메타 데이터:**
+
+| 필드 | 타입 | 태그 | 설명 |
+|------|------|------|------|
+| actions | list | [S→M] | 대응 조치 리스트 [{type, description}, ...] |
+| rag_references | list | [S→M] | 검색된 참조 문서들 [{type, content}, ...] |
+| embedding_stored | bool | [M] | 이벤트 임베딩 저장 여부 |
+| report_updated | bool | [S→M] | 보고서 백엔드 갱신 여부 |
+| errors | List[str] | [M/S] | 에러 메시지 목록 |
+
+**태그 설명:**
+- `[M]` = Main Graph에서만 사용
+- `[S]` = Sub Graph (response_agent)에서만 사용
+- `[M/S]` = 양쪽 모두 사용
+- `[S→M]` = Sub Graph에서 생성되어 Main Graph로 반환
 
 ---
 
@@ -366,7 +416,7 @@ LangGraph 워크플로우를 빌드합니다.
 
 ```
 [Entry Point] → precision_analysis → verification → update_backend → verification_router
-    ├─ ABNORMAL → response_agent → store_embedding → END
+    ├─ ABNORMAL → response_agent → store_embedding → END (순차 실행)
     └─ SUSPICIOUS → END
 ```
 
@@ -421,9 +471,11 @@ Qdrant (past_cases 컬렉션) 저장
 현재 사건과 유사한 **과거 사례**를 검색합니다.
 
 ```
-[response_agent에서 도구 호출]
+[response_agent에서 LLM이 도구 호출 결정]
     ↓
-search_protocol_and_cases(query=summary, event_type=event_type)
+LLM이 상황 컨텍스트(summary, camera_name 등)를 보고 query 파라미터 생성
+    ↓
+search_protocol_and_cases(summary="상황요약", event_type=event_type, ...)
     ↓
 query를 실시간 임베딩 (OpenAI Embedding API)
     ↓
@@ -431,6 +483,57 @@ Qdrant (past_cases 컬렉션) 유사도 검색
     ↓
 유사한 과거 사례 반환 + 대응 매뉴얼 템플릿
 ```
+
+**참고:** query 값은 코드에 하드코딩되어 있지 않으며, LLM(GPT)이 Tool Calling으로 자동 결정합니다.
+
+---
+
+### tools 폴더 - LangChain 도구 모음
+
+#### tools/response_tools.py - 대응 도구
+
+response_agent에서 사용하는 LangChain Tool들을 정의합니다.
+
+**create_response_tools(config) 함수:**
+- 반환: `[search_protocol_and_cases, execute_field_action, emergency_call]`
+
+| 도구 | 설명 | 파라미터 |
+|------|------|----------|
+| `search_protocol_and_cases` | 대응 매뉴얼 및 과거 사례 검색 | summary, event_type, camera_name, camera_location |
+| `execute_field_action` | 현장 물리적 조치 실행 | action_name (BROADCAST/LIGHT_ON/PTZ_TRACK/SIREN), camera_id, message_content |
+| `emergency_call` | 긴급 신고 접수 | agency_type (112_POLICE/119_FIRE/SECURITY_TEAM/MANAGEMENT), situation_report |
+
+**사용 예시:**
+```python
+from src.tools.response_tools import create_response_tools
+from src.config import Config
+
+config = Config()
+tools = create_response_tools(config)
+# tools = [search_protocol_and_cases, execute_field_action, emergency_call]
+```
+
+#### tools/embedding_tools.py - 임베딩 도구
+
+OpenAI Embedding API를 사용하여 텍스트를 벡터로 변환합니다.
+
+| 함수 | 설명 |
+|------|------|
+| `get_text_embedding(text, config)` | 단일 텍스트 → 벡터 변환 |
+| `get_batch_embeddings(texts, config)` | 배치 텍스트 → 벡터 리스트 변환 |
+| `calculate_similarity(vec1, vec2)` | 두 벡터 간 코사인 유사도 계산 |
+
+#### tools/search_tools.py - 검색 도구
+
+VectorStoreClient를 사용하여 Qdrant에서 유사 문서를 검색합니다.
+
+| 함수 | 설명 | 컬렉션 |
+|------|------|--------|
+| `search_manual(query, config)` | 대응 매뉴얼 검색 | manuals |
+| `search_past_cases(query, config, event_type)` | 과거 사례 검색 | past_cases |
+| `format_search_results(results)` | 검색 결과 포맷팅 | - |
+
+---
 
 #### 흐름 다이어그램
 
@@ -440,14 +543,17 @@ Qdrant (past_cases 컬렉션) 유사도 검색
 [과거 사건 C] → store_embedding → Qdrant 저장 ──┘
                                                     ↑
 [현재 사건 D]                                       │
-    ├─ response_agent ─→ search_protocol_and_cases ─┘ (실시간 임베딩 → 유사도 검색)
-    └─ store_embedding ─→ Qdrant 저장 (미래 검색용)
+    │                                               │
+    ├─ 1. response_agent ─→ search_protocol_and_cases ─┘ (과거 사례 검색)
+    │         ↓
+    └─ 2. store_embedding ─→ Qdrant 저장 (미래 검색용)
 ```
 
 **핵심 포인트:**
-- 현재 사건은 **검색 시 실시간 임베딩**되어 과거 사례와 비교됨
-- 현재 사건은 **처리 완료 후 저장**되어 미래 검색에 활용됨
-- 두 작업은 **독립적**이라 병렬 실행해도 문제없음
+- `response_agent` → `store_embedding` **순차 실행** (병렬 아님)
+- 검색이 먼저 수행되고, 저장이 나중에 수행됨
+- 따라서 **현재 사건은 검색 결과에 포함되지 않음** (의도된 설계)
+- 현재 사건은 처리 완료 후 저장되어 **미래 유사 사건 발생 시** 검색에 활용됨
 
 ---
 
@@ -715,10 +821,7 @@ graph TD
         N_Verify --> N_Update["16. 백엔드 갱신<br>(update_backend)"]
         N_Update --> Router2{"17. 검증 결과<br>(verification_router)"}
         
-        Router2 -- "ABNORMAL<br>(검증 통과)" --> N_Embed["18. 임베딩 저장<br>(store_embedding)"]
         Router2 -- "SUSPICIOUS<br>(검증 실패)" --> EndGraph((End))
-        
-        N_Embed --> EndGraph
         
         Router2 -- "ABNORMAL<br>(검증 통과)" --> SubAgent
         
@@ -735,7 +838,8 @@ graph TD
             SA_Report --> SA_UpdateBackend
         end
         
-        SubAgent --> EndGraph
+        SubAgent --> N_Embed["19. 임베딩 저장<br>(store_embedding)"]
+        N_Embed --> EndGraph
     end
 
     Clip ==> Start
@@ -1023,11 +1127,7 @@ graph TD
         N_Update -.-> D_Req2
         D_Req2 -.-> Backend2
         N_Update --> Router
-        Router -- "이상" --> N_Embed
         Router -- "의심" --> EndFinal
-        N_Embed -.-> D_Embed
-        D_Embed -.-> Qdrant
-        N_Embed --> EndFinal
         
         Router -- "이상" --> SubAgent
         
@@ -1054,7 +1154,10 @@ graph TD
             SA_UpdateBackend -.-> Backend2
         end
         
-        SubAgent --> D_Report
+        SubAgent --> N_Embed["19. store_embedding"]:::proc
+        N_Embed -.-> D_Embed
+        D_Embed -.-> Qdrant
+        N_Embed --> D_Report
         D_Report --> EndFinal
     end
 
@@ -1065,7 +1168,7 @@ graph TD
 
 ## 🐛 Known Issues
 
-> 최종 갱신일: 2026-02-09
+> 최종 갱신일: 2026-02-10
 
 ### 구현 상태
 
@@ -1073,11 +1176,12 @@ graph TD
 |------|-------------|------|------|
 | `services/report_generator.py` | `ReportGeneratorService` | ✅ 완료 | HTML, PDF, DOCX, PPTX 보고서 생성 |
 | `graph/subgraphs/response_agent.py` | `generate_report_node()` | ✅ 완료 | 보고서 생성 + Mock 서버 업로드 |
-| `graph/subgraphs/response_agent.py` | `execute_field_action()` | ⚠️ Mock | CCTV 방송/조명/PTZ/사이렌 제어 (Mock 응답) |
-| `graph/subgraphs/response_agent.py` | `emergency_call()` | ⚠️ Mock | 112/119/보안팀 신고 (Mock 응답) |
-| `graph/subgraphs/response_agent.py` | `search_protocol_and_cases()` | ⚠️ 일부 Mock | 과거 사례는 Qdrant 검색, 매뉴얼은 하드코딩 |
+| `tools/response_tools.py` | `execute_field_action()` | ⚠️ Mock | CCTV 방송/조명/PTZ/사이렌 제어 (Mock 응답) |
+| `tools/response_tools.py` | `emergency_call()` | ⚠️ Mock | 112/119/보안팀 신고 (Mock 응답) |
+| `tools/response_tools.py` | `search_protocol_and_cases()` | ⚠️ 일부 Mock | 과거 사례는 Qdrant 검색, 매뉴얼은 하드코딩 |
 | `clients/vector_store_client.py` | `VectorStoreClient` | ✅ 완료 | Qdrant 연동 (store_embedding에서 사용) |
-| `graph/nodes/verification.py` | `verification_node()` | ✅ 완료 | OpenAI Vision API 호출 |
+| `clients/verification_client.py` | `VerificationClient` | ✅ 완료 | OpenAI Vision API 기반 검증 |
+| `graph/nodes/verification.py` | `verification_node()` | ✅ 완료 | VerificationClient를 사용한 검증 노드 |
 
 ### Mock 상태인 기능 (운영 환경 연동 필요)
 

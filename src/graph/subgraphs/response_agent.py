@@ -22,11 +22,11 @@ from datetime import datetime
 from langgraph.graph import StateGraph, END, START
 from langgraph.prebuilt import ToolNode
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage, SystemMessage
-from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 from ..state import AnalysisState
 from ...config import Config
+from ...tools.response_tools import create_response_tools
 
 logger = logging.getLogger(__name__)
 
@@ -62,200 +62,21 @@ class ResponseAgentState(TypedDict):
 # 도구 정의
 # =========================================
 def create_tools(config: Config):
-    """에이전트가 사용할 도구들을 생성합니다."""
+    """
+    에이전트가 사용할 도구들을 생성합니다.
 
-    @tool
-    def search_protocol_and_cases(query: str, event_type: str) -> str:
-        """
-        지식 검색 도구: event_type에 맞는 표준 대응 매뉴얼과 유사한 과거 사례를 검색합니다.
+    도구들은 src/tools/response_tools.py에 정의되어 있습니다:
+    - search_protocol_and_cases: 대응 매뉴얼 및 과거 사례 검색
+    - execute_field_action: 현장 물리적 조치 실행
+    - emergency_call: 긴급 신고 접수
 
-        Args:
-            query: 상황 요약 (예: "1층 로비에서 남성이 쓰러져 있음")
-            event_type: 사건 유형 (ASSAULT, BURGLARY, DUMP, SWOON, VANDALISM)
+    Args:
+        config: Config 인스턴스
 
-        Returns:
-            해당 사건에 대한 단계별 대응 지침, 법적 근거, 과거 유사 처리 결과
-        """
-        from ...clients.vector_store_client import VectorStoreClient
-
-        logger.info(f"[Tool] search_protocol_and_cases 호출: query='{query[:50]}...', event_type={event_type}")
-
-        result_text = ""
-
-        # 1. 과거 사례 검색 (past_cases 컬렉션 - store_embedding에서 저장한 데이터)
-        try:
-            client = VectorStoreClient(config)
-
-            if client.collection_exists("past_cases"):
-                past_results = client.search(
-                    collection_name="past_cases",
-                    query=query,
-                    limit=3,
-                    filters={"event_type": event_type} if event_type else None
-                )
-
-                if past_results:
-                    result_text += "## 과거 유사 사례\n\n"
-                    for i, result in enumerate(past_results, 1):
-                        payload = result.get("payload", {})
-                        score = result.get("score", 0)
-                        result_text += f"### 사례 {i} (유사도: {score:.2f})\n"
-                        result_text += f"- 카메라: {payload.get('camera_name', '')} ({payload.get('camera_location', '')})\n"
-                        result_text += f"- 이벤트: {payload.get('event_type', '')}\n"
-                        result_text += f"- 발생시각: {payload.get('occurred_at', '')}\n"
-                        result_text += f"- 상황: {payload.get('summary', '')}\n\n"
-                else:
-                    result_text += "## 과거 유사 사례\n검색 결과 없음\n\n"
-            else:
-                result_text += "## 과거 유사 사례\n컬렉션이 존재하지 않습니다.\n\n"
-
-        except Exception as e:
-            logger.error(f"과거 사례 검색 실패: {e}")
-            result_text += f"## 과거 유사 사례\n검색 실패: {e}\n\n"
-
-        # 2. 대응 매뉴얼 (현재는 Mock - 추후 manuals 컬렉션 구현 시 연동)
-        manual_templates = {
-            "ASSAULT": """## 대응 매뉴얼 (ASSAULT - 폭행)
-
-### 단계별 대응 지침
-1. 상황 확인: CCTV 영상으로 현장 상황 재확인
-2. 초동 조치: 보안 담당자 현장 출동 지시
-3. 경찰 신고: 112 신고 (폭행 현행범)
-4. 피해자 보호: 피해자 안전 확보 및 응급 조치
-5. 증거 보존: 영상 클립 및 보고서 저장
-
-### 법적 근거
-- 형법 제260조 (폭행죄)
-- 경비업법 제7조 (경비업무의 범위)""",
-
-            "SWOON": """## 대응 매뉴얼 (SWOON - 실신)
-
-### 단계별 대응 지침
-1. 상황 확인: 쓰러진 사람의 상태 확인
-2. 119 신고: 즉시 응급 신고
-3. 현장 조치: 보안 담당자 출동, 주변 통제
-4. 응급 처치: AED 준비, 기도 확보
-5. 기록 보존: 영상 클립 및 보고서 저장
-
-### 법적 근거
-- 응급의료에 관한 법률 제5조 (응급환자에 대한 신고 및 협조 의무)""",
-
-            "BURGLARY": """## 대응 매뉴얼 (BURGLARY - 절도/침입)
-
-### 단계별 대응 지침
-1. 상황 확인: 침입자 위치 및 행동 파악
-2. 112 신고: 즉시 경찰 신고
-3. PTZ 추적: 카메라로 대상 추적
-4. 현장 통제: 보안 담당자 출동, 출입구 봉쇄
-5. 증거 보존: 영상 클립 및 보고서 저장
-
-### 법적 근거
-- 형법 제329조 (절도죄)
-- 형법 제319조 (주거침입죄)""",
-
-            "VANDALISM": """## 대응 매뉴얼 (VANDALISM - 기물파손)
-
-### 단계별 대응 지침
-1. 상황 확인: 파손 행위 및 대상 확인
-2. 현장 방송: 경고 방송 실시
-3. 보안팀 출동: 현장 확인 및 제지
-4. 피해 기록: 파손 상태 촬영 및 기록
-5. 신고 판단: 피해 규모에 따라 112 신고
-
-### 법적 근거
-- 형법 제366조 (재물손괴죄)""",
-
-            "DUMP": """## 대응 매뉴얼 (DUMP - 무단투기)
-
-### 단계별 대응 지침
-1. 상황 확인: 투기 행위 및 대상물 확인
-2. 현장 방송: 경고 방송 실시
-3. 증거 확보: 투기자 인상착의 및 영상 저장
-4. 신고: 관할 구청 또는 환경부 신고
-5. 기록 보존: 보고서 작성
-
-### 법적 근거
-- 폐기물관리법 제68조 (과태료)"""
-        }
-
-        result_text += manual_templates.get(event_type, f"## 대응 매뉴얼\n{event_type}에 대한 매뉴얼이 등록되지 않았습니다.")
-
-        return result_text
-
-    @tool
-    def execute_field_action(action_name: str, camera_id: str, message_content: str = None) -> str:
-        """
-        현장 대응 도구: CCTV 방송, 조명 제어, PTZ 추적 등 물리적인 조치를 취합니다.
-
-        Args:
-            action_name: 실행할 액션 (BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN)
-                - BROADCAST: CCTV 스피커로 음성 방송
-                - LIGHT_ON: 현장 조명 점등
-                - PTZ_TRACK: PTZ 카메라로 대상 추적
-                - SIREN: 경고 사이렌 작동
-            camera_id: 대상 카메라 ID
-            message_content: 방송 메시지 (BROADCAST 시 필수)
-
-        Returns:
-            실행 성공 여부
-        """
-        logger.info(f"[Tool] execute_field_action 호출: action={action_name}, camera={camera_id}, message={message_content}")
-
-        # Mock 응답 - 실제 구현 시 장비 제어 API 호출
-        mock_response = f"""## 현장 조치 실행 결과
-
-- 액션: {action_name}
-- 대상 카메라: {camera_id}
-- 실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- 상태: ✅ 성공
-
-{f'- 방송 내용: "{message_content}"' if message_content else ''}
-"""
-        return mock_response
-
-    @tool
-    def emergency_call(agency_type: str, situation_report: str) -> str:
-        """
-        긴급 전파 도구: 112, 119 또는 유관 부서에 시스템적으로 신고를 접수합니다.
-
-        Args:
-            agency_type: 신고 기관 (112_POLICE, 119_FIRE, SECURITY_TEAM, MANAGEMENT)
-                - 112_POLICE: 경찰 신고
-                - 119_FIRE: 소방/응급 신고
-                - SECURITY_TEAM: 내부 보안팀 호출
-                - MANAGEMENT: 관리사무소 연락
-            situation_report: 상황 보고 내용 (신고 시 전달할 내용)
-
-        Returns:
-            신고 접수 결과
-        """
-        logger.info(f"[Tool] emergency_call 호출: agency={agency_type}, report={situation_report[:50]}...")
-
-        # Mock 응답 - 실제 구현 시 신고 API 연동
-        agency_names = {
-            "112_POLICE": "경찰청 112",
-            "119_FIRE": "소방청 119",
-            "SECURITY_TEAM": "내부 보안팀",
-            "MANAGEMENT": "관리사무소"
-        }
-
-        mock_response = f"""## 긴급 신고 접수 결과
-
-- 신고 기관: {agency_names.get(agency_type, agency_type)}
-- 접수 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- 접수 번호: EMG-{datetime.now().strftime('%Y%m%d%H%M%S')}
-- 상태: ✅ 접수 완료
-
-### 전달 내용
-{situation_report}
-
-### 예상 대응
-- 담당자 배정 중
-- 예상 도착 시간: 5-10분
-"""
-        return mock_response
-
-    return [search_protocol_and_cases, execute_field_action, emergency_call]
+    Returns:
+        LangChain 도구 리스트
+    """
+    return create_response_tools(config)
 
 
 # =========================================
@@ -273,33 +94,37 @@ def create_agent_node(config: Config, tools: list):
 
     system_prompt = """당신은 CCTV 이상 감지 시스템의 대응 전문가입니다.
 
-## 역할
-이상 상황이 감지되면 적절한 대응 조치를 결정하고 실행합니다.
-
-## 사용 가능한 도구
-1. **search_protocol_and_cases**: 대응 매뉴얼과 과거 사례 검색
-2. **execute_field_action**: 현장 물리적 조치 (방송, 조명, PTZ, 사이렌)
-3. **emergency_call**: 긴급 신고 (112, 119, 보안팀)
-
-## 프로세스
-1. 상황 분석: 제공된 이벤트 정보를 분석합니다.
-2. 지식 검색: search_protocol_and_cases로 대응 매뉴얼과 유사 사례를 검색합니다.
-3. 현장 조치: execute_field_action으로 필요한 현장 조치를 실행합니다.
-4. 긴급 신고: 필요시 emergency_call로 112/119/보안팀에 신고합니다.
-5. 완료: 모든 필요한 조치를 완료했으면 종료합니다.
-
-## 대응 기준
-- SWOON (실신): 즉시 119 신고, 현장 방송으로 주변에 알림
-- ASSAULT (폭행): 112 신고 + 보안팀 출동, 현장 방송/사이렌
-- BURGLARY (절도): 112 신고 + 보안팀 출동, PTZ 추적
-- VANDALISM (기물파손): 보안팀 출동, 현장 방송
-- DUMP (무단투기): 현장 방송으로 경고, 기록 보존
-
-## 주의사항
-- 상황 심각도에 따라 적절한 도구를 선택하세요.
-- 인명 관련 사건(SWOON, ASSAULT)은 반드시 긴급 신고를 수행하세요.
-- 현장 조치와 신고를 병행할 수 있습니다.
-"""
+    ## 역할
+    이상 상황이 감지되면 적절한 대응 조치를 결정하고 실행합니다.
+    
+    ## 사용 가능한 도구
+    1. **search_protocol_and_cases**: 대응 매뉴얼과 과거 사례 검색
+       - summary: 상황 요약 (필수, 검색 우선순위 가장 높음)
+       - event_type: 사건 유형 (필수)
+       - camera_name: 카메라 이름 (선택)
+       - camera_location: 카메라 위치 (선택)
+    2. **execute_field_action**: 현장 물리적 조치 (방송, 조명, PTZ, 사이렌)
+    3. **emergency_call**: 긴급 신고 (112, 119, 보안팀)
+    
+    ## 프로세스
+    1. 상황 분석: 제공된 이벤트 정보를 분석합니다.
+    2. 지식 검색: search_protocol_and_cases로 대응 매뉴얼과 유사 사례를 검색합니다.
+    3. 현장 조치: execute_field_action으로 필요한 현장 조치를 실행합니다.
+    4. 긴급 신고: 필요시 emergency_call로 112/119/보안팀에 신고합니다.
+    5. 완료: 모든 필요한 조치를 완료했으면 종료합니다.
+    
+    ## 대응 기준
+    - SWOON (실신): 즉시 119 신고, 현장 방송으로 주변에 알림
+    - ASSAULT (폭행): 112 신고 + 보안팀 출동, 현장 방송/사이렌
+    - BURGLARY (절도): 112 신고 + 보안팀 출동, PTZ 추적
+    - VANDALISM (기물파손): 보안팀 출동, 현장 방송
+    - DUMP (무단투기): 현장 방송으로 경고, 기록 보존
+    
+    ## 주의사항
+    - 상황 심각도에 따라 적절한 도구를 선택하세요.
+    - 인명 관련 사건(SWOON, ASSAULT)은 반드시 긴급 신고를 수행하세요.
+    - 현장 조치와 신고를 병행할 수 있습니다.
+    """
 
     def agent_node(state: ResponseAgentState) -> Dict[str, Any]:
         """에이전트가 다음 행동을 결정합니다."""
@@ -308,13 +133,13 @@ def create_agent_node(config: Config, tools: list):
         # 첫 실행 시 시스템 프롬프트와 상황 정보 추가
         if not messages:
             context = f"""## 현재 상황
-- 카메라: {state.get('camera_name', '')} ({state.get('camera_location', '')})
-- 이벤트 유형: {state.get('event_type', '')}
-- 위험도: {state.get('risk_level', '')} (점수: {state.get('risk_score', 0)})
-- 상황 요약: {state.get('summary', '')}
-- 발생 시각: {state.get('occurred_at', '')}
-
-위 상황에 대해 적절한 대응 조치를 결정해주세요."""
+            - 카메라: {state.get('camera_name', '')} ({state.get('camera_location', '')})
+            - 이벤트 유형: {state.get('event_type', '')}
+            - 위험도: {state.get('risk_level', '')} (점수: {state.get('risk_score', 0)})
+            - 상황 요약: {state.get('summary', '')}
+            - 발생 시각: {state.get('occurred_at', '')}
+            
+            위 상황에 대해 적절한 대응 조치를 결정해주세요."""
 
             messages = [
                 SystemMessage(content=system_prompt),

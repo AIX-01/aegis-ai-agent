@@ -26,7 +26,7 @@ def build_graph(config: Config):
     2. verification: 정밀 분석 결과 검증
     3. update_backend: 검증 결과로 백엔드 갱신
     4. verification_router: 검증 결과에 따른 분기
-       - ABNORMAL → response_agent (ReAct Agent) + store_embedding (병렬) → END
+       - ABNORMAL → response_agent (ReAct Agent) → store_embedding (순차) → END
        - SUSPICIOUS → END
 
     Args:
