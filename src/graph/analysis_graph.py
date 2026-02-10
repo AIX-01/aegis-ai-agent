@@ -64,7 +64,7 @@ def build_graph(config: Config):
 
     # action_node 의존성 주입
     if _redis_manager:
-        set_action_dependencies(config, vector_client, _redis_manager)
+        set_action_dependencies(config, vector_client, _redis_manager, backend_client)
 
     # 노드에 클라이언트 바인딩
     verification = functools.partial(verification_node, verification_client=verification_client)

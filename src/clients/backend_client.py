@@ -228,3 +228,55 @@ class BackendClient:
                     time.sleep(self.retry_delay)
 
         return False
+
+    def record_event_action(
+        self,
+        event_id: str,
+        action_id: Optional[str],
+        input_params: Dict[str, Any],
+        output_result: str,
+        success: bool,
+        executed_at: str
+    ) -> bool:
+        """
+        이벤트에 대한 액션 실행 결과를 백엔드에 기록합니다.
+        POST /api/events/{event_id}/actions
+
+        Args:
+            event_id: 이벤트 ID
+            action_id: 실행한 액션 ID (없으면 None)
+            input_params: 입력 파라미터
+            output_result: 출력 결과
+            success: 성공 여부
+            executed_at: 실행 시각 (ISO 8601)
+
+        Returns:
+            성공 여부
+        """
+        # /api/events/{event_id}/actions
+        endpoint = f"{self.create_endpoint.rsplit('/internal/agent', 1)[0]}/api/events/{event_id}/actions"
+
+        payload = {
+            "actionId": action_id,
+            "inputParams": input_params,
+            "outputResult": output_result,
+            "success": success,
+            "executedAt": executed_at
+        }
+
+        try:
+            response = requests.post(
+                endpoint,
+                json=payload,
+                timeout=self.timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+
+            self.logger.info(f"✅ [액션 기록 성공] Event ID: {event_id}, Action: {action_id or 'manual'}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"❌ [액션 기록 실패] Event ID {event_id}: {e}")
+            return False
+

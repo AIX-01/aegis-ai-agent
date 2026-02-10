@@ -6,6 +6,7 @@
 - 동적 도구: Redis에서 가져온 액션 코드
 """
 import logging
+from datetime import datetime
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 from langchain_openai import ChatOpenAI
@@ -17,6 +18,7 @@ from ...tools import search_manual, set_vector_client, create_dynamic_tools
 if TYPE_CHECKING:
     from ...config import Config
     from ...clients.vector_store_client import VectorStoreClient
+    from ...clients.backend_client import BackendClient
     from ...core.redis_manager import RedisManager
 
 logger = logging.getLogger(__name__)
@@ -25,18 +27,21 @@ logger = logging.getLogger(__name__)
 _config: Optional["Config"] = None
 _vector_client: Optional["VectorStoreClient"] = None
 _redis_manager: Optional["RedisManager"] = None
+_backend_client: Optional["BackendClient"] = None
 
 
 def set_action_dependencies(
     config: "Config",
     vector_client: "VectorStoreClient",
-    redis_manager: "RedisManager"
+    redis_manager: "RedisManager",
+    backend_client: "BackendClient" = None
 ):
     """action_node에서 사용할 의존성을 설정합니다."""
-    global _config, _vector_client, _redis_manager
+    global _config, _vector_client, _redis_manager, _backend_client
     _config = config
     _vector_client = vector_client
     _redis_manager = redis_manager
+    _backend_client = backend_client
 
     # 매뉴얼 검색 도구에 VectorStoreClient 주입
     set_vector_client(vector_client)
@@ -109,6 +114,11 @@ def action_node(state: AnalysisState) -> Dict[str, Any]:
         logger.info(f"[{camera_id}] 대응 조치 완료: {len(actions_taken)}건의 조치 실행됨")
         for action in actions_taken:
             logger.info(f"  - {action.get('tool', 'unknown')}: {action.get('result', '')[:50]}...")
+
+        # 6. 실행된 액션을 백엔드에 기록
+        event_id = state.get("event_id")
+        if event_id and _backend_client:
+            _record_actions_to_backend(event_id, actions_taken)
 
         return {
             "actions": actions_taken,
@@ -195,3 +205,33 @@ def _parse_agent_result(result: Dict[str, Any]) -> tuple:
     return actions_taken, rag_references
 
 
+def _record_actions_to_backend(event_id: str, actions_taken: List[Dict[str, Any]]):
+    """
+    실행된 액션들을 백엔드에 기록합니다.
+
+    Args:
+        event_id: 이벤트 ID
+        actions_taken: 실행된 액션 목록
+    """
+    if not _backend_client:
+        return
+
+    for action in actions_taken:
+        tool_name = action.get("tool", "unknown")
+        result = action.get("result", "")
+
+        # search_manual은 조회용이므로 기록하지 않음
+        if tool_name == "search_manual":
+            continue
+
+        try:
+            _backend_client.record_event_action(
+                event_id=event_id,
+                action_id=None,  # 동적 Tool은 action_id가 없음
+                input_params={"tool_name": tool_name},
+                output_result=result[:1000] if len(result) > 1000 else result,
+                success=True,
+                executed_at=datetime.now().isoformat()
+            )
+        except Exception as e:
+            logger.error(f"액션 기록 실패: {tool_name} - {e}")

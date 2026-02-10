@@ -290,6 +290,7 @@ Redis 기반 카메라/액션 동기화를 담당합니다.
 | `get_clip_upload_url()` | GET /internal/agent/events/{id}/clip/upload-url | presigned URL 획득 |
 | `upload_clip()` | PUT {presigned_url} | MP4 직접 업로드 |
 | `confirm_event_clip()` | POST /internal/agent/events/{id}/clip/confirm | 업로드 완료 확인 |
+| `record_event_action()` | POST /api/events/{id}/actions | 실행한 액션 결과 기록 |
 
 ---
 
