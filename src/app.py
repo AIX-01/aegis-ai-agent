@@ -2,6 +2,7 @@
 AEGIS AI Agent의 메인 진입점 - LangGraph 기반 분석 파이프라인 (FastAPI 기반)
 """
 import argparse
+import logging
 import threading
 import time
 import asyncio
@@ -239,6 +240,13 @@ async def lifespan(app: FastAPI):
     agent = AegisAgent(config)
     agent.start()
     
+    # Qdrant 컬렉션 초기화
+    try:
+        vector_client = VectorStoreClient(config)
+        vector_client.create_collection("manuals")
+    except Exception as e:
+        logging.getLogger("aegis-agent").warning(f"Qdrant 컬렉션 초기화 실패: {e}")
+
     yield
     
     # 종료 시 실행
@@ -277,6 +285,7 @@ async def sync_manual_embedding(request: ManualEmbeddingRequest):
     try:
         vector_client = VectorStoreClient(agent.config)
         manual = request.manual
+
 
         if request.action == "delete":
             # Qdrant에서 포인트 삭제
