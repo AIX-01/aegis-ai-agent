@@ -248,6 +248,30 @@ class VectorStoreClient:
             logger.error(f"문서 저장 실패: {e}")
             return False
 
+    def delete_document(self, collection_name: str, doc_id: str) -> bool:
+        """
+        문서를 벡터 DB에서 삭제합니다.
+
+        Args:
+            collection_name: 컬렉션 이름
+            doc_id: 삭제할 문서 ID
+
+        Returns:
+            성공 여부
+        """
+        try:
+            numeric_id = self._generate_id(doc_id)
+            self.client.delete(
+                collection_name=collection_name,
+                points_selector=[numeric_id]
+            )
+            logger.debug(f"문서 '{doc_id}' -> '{collection_name}' 삭제 완료")
+            return True
+
+        except Exception as e:
+            logger.error(f"문서 삭제 실패: {e}")
+            return False
+
     def add_documents_batch(
         self,
         collection_name: str,
