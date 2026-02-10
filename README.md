@@ -39,7 +39,8 @@ src/
 │   ├── backend_client.py       # 백엔드 API 클라이언트 (이벤트 CRUD, 클립 업로드)
 │   ├── precision_client.py     # 정밀 분석 LLM 클라이언트
 │   ├── vlm_client.py           # VLM 분석 클라이언트
-│   └── vector_store_client.py  # Vector DB 클라이언트 (미구현)
+│   ├── vector_store_client.py  # Qdrant 벡터 DB 클라이언트 (RAG 검색)
+│   └── openai_client.py        # OpenAI API 클라이언트 (임베딩, Chat, Vision)
 │
 ├── core/
 │   ├── __init__.py
@@ -49,7 +50,7 @@ src/
 │   ├── consumer.py             # 분석 워커 풀 (VLM → 클립 생성 → LangGraph)
 │   ├── queue_manager.py        # 오버플로우 보호 작업 큐
 │   ├── windowing.py            # 프레임 슬라이딩 윈도우 생성기
-│   └── redis_manager.py        # Redis Pub/Sub 기반 카메라 동기화
+│   └── redis_manager.py        # Redis Pub/Sub 기반 카메라/액션 동기화
 │
 ├── graph/
 │   ├── __init__.py
