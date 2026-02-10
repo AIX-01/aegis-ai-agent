@@ -19,6 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.env
 
 # Virtual environments
 venv/
@@ -32,6 +33,7 @@ ENV/
 *.swp
 *.swo
 *~
+*.iml
 
 # Logs
 *.log
@@ -49,4 +51,4 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
-*.tmp
+*.tmp!/.env
