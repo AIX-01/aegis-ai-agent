@@ -249,88 +249,92 @@ class ReportGeneratorService:
         try:
             doc = Document(template_path)
 
-            # 단락에서 플레이스홀더 치환
-            for para in doc.paragraphs:
-                full_text = para.text
+            def replace_placeholders_in_paragraph(para, data, frames):
+                """단락에서 플레이스홀더를 치환합니다. run이 나뉘어진 경우도 처리."""
+                # 전체 텍스트 추출 (모든 run을 합침)
+                full_text = "".join([run.text for run in para.runs])
 
-                # {{frames}} 처리
+                if not full_text.strip():
+                    return False
+
+                # 이미지 플레이스홀더 처리
                 if "{{frames}}" in full_text:
                     for run in para.runs:
                         run.text = ""
-                    current_para = para
                     for i, frame in enumerate(frames[:8]):
-                        run = current_para.add_run()
+                        run = para.add_run()
                         run.add_picture(io.BytesIO(frame), width=Inches(1.2))
-                        if (i + 1) % 4 == 0 and i < 7:
-                            new_para = doc.add_paragraph()
-                            para._element.addnext(new_para._element)
-                            current_para = new_para
-                    continue
+                    return True  # 이미지 처리됨
 
-                # 다른 플레이스홀더 처리
+                # Frame 1 ~ Frame 8 처리
+                for i in range(1, 9):
+                    if f"Frame {i}" in full_text and i <= len(frames):
+                        for run in para.runs:
+                            run.text = ""
+                        run = para.add_run()
+                        run.add_picture(io.BytesIO(frames[i-1]), width=Inches(1.8))
+                        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        return True  # 이미지 처리됨
+
+                # 텍스트 플레이스홀더 치환
+                new_text = full_text
                 for key, value in data.items():
                     if key == "frames":
                         continue
                     placeholder = f"{{{{{key}}}}}"
-                    if placeholder in full_text:
+                    if placeholder in new_text:
                         if key == "actions":
                             value = data["actions_text"]
-                        new_text = full_text.replace(placeholder, str(value))
-                        for run in para.runs:
+                        new_text = new_text.replace(placeholder, str(value))
+
+                # 텍스트가 변경된 경우에만 업데이트
+                if new_text != full_text:
+                    # 첫 번째 run에 전체 텍스트 넣고 나머지는 비움
+                    if para.runs:
+                        para.runs[0].text = new_text
+                        for run in para.runs[1:]:
                             run.text = ""
-                        if para.runs:
-                            para.runs[0].text = new_text
-                        else:
-                            para.add_run(new_text)
-                        full_text = new_text
+                    else:
+                        para.add_run(new_text)
+
+                return False  # 이미지 아님
+
+            # 단락에서 플레이스홀더 치환
+            for para in doc.paragraphs:
+                replace_placeholders_in_paragraph(para, data, frames)
 
             # 테이블에서 플레이스홀더 치환
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
                         for para in cell.paragraphs:
-                            full_text = para.text
+                            image_processed = replace_placeholders_in_paragraph(para, data, frames)
+                            if image_processed:
+                                cell.vertical_alignment = WD_TABLE_ALIGNMENT.CENTER
 
-                            # {{frames}} 처리
-                            if "{{frames}}" in full_text:
-                                for run in para.runs:
-                                    run.text = ""
-                                current_para = para
-                                for i, frame in enumerate(frames[:8]):
-                                    run = current_para.add_run()
-                                    run.add_picture(io.BytesIO(frame), width=Inches(1.2))
-                                    if (i + 1) % 4 == 0 and i < 7:
-                                        current_para = cell.add_paragraph()
-                                continue
+            # 머리글(Header)과 바닥글(Footer)에서 플레이스홀더 치환
+            for section in doc.sections:
+                # 머리글 처리
+                for header in [section.header, section.first_page_header, section.even_page_header]:
+                    if header is not None:
+                        for para in header.paragraphs:
+                            replace_placeholders_in_paragraph(para, data, frames)
+                        for table in header.tables:
+                            for row in table.rows:
+                                for cell in row.cells:
+                                    for para in cell.paragraphs:
+                                        replace_placeholders_in_paragraph(para, data, frames)
 
-                            # Frame 1 ~ Frame 8 개별 처리
-                            for i in range(1, 9):
-                                frame_placeholder = f"Frame {i}"
-                                if frame_placeholder in full_text and i <= len(frames):
-                                    for run in para.runs:
-                                        run.text = ""
-                                    run = para.add_run()
-                                    run.add_picture(io.BytesIO(frames[i-1]), width=Inches(1.8))
-                                    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                    cell.vertical_alignment = WD_TABLE_ALIGNMENT.CENTER
-                                    break
-
-                            # 다른 플레이스홀더 처리
-                            for key, value in data.items():
-                                if key == "frames":
-                                    continue
-                                placeholder = f"{{{{{key}}}}}"
-                                if placeholder in full_text:
-                                    if key == "actions":
-                                        value = data["actions_text"]
-                                    new_text = full_text.replace(placeholder, str(value))
-                                    for run in para.runs:
-                                        run.text = ""
-                                    if para.runs:
-                                        para.runs[0].text = new_text
-                                    else:
-                                        para.add_run(new_text)
-                                    full_text = new_text
+                # 바닥글 처리
+                for footer in [section.footer, section.first_page_footer, section.even_page_footer]:
+                    if footer is not None:
+                        for para in footer.paragraphs:
+                            replace_placeholders_in_paragraph(para, data, frames)
+                        for table in footer.tables:
+                            for row in table.rows:
+                                for cell in row.cells:
+                                    for para in cell.paragraphs:
+                                        replace_placeholders_in_paragraph(para, data, frames)
 
             # BytesIO에 저장
             buffer = io.BytesIO()
@@ -367,32 +371,14 @@ class ReportGeneratorService:
                 for shape in slide.shapes:
                     if hasattr(shape, "text_frame"):
                         for para in shape.text_frame.paragraphs:
-                            for run in para.runs:
-                                for key, value in data.items():
-                                    if key == "frames":
-                                        continue
-                                    if key == "actions":
-                                        if "{{actions}}" in run.text:
-                                            run.text = run.text.replace("{{actions}}", data["actions_text"])
-                                        continue
-                                    if f"{{{{{key}}}}}" in run.text:
-                                        run.text = run.text.replace(f"{{{{{key}}}}}", str(value))
+                            self._replace_placeholders_in_pptx_paragraph(para, data)
 
                     # 테이블 처리
                     if shape.has_table:
                         for row in shape.table.rows:
                             for cell in row.cells:
                                 for para in cell.text_frame.paragraphs:
-                                    for run in para.runs:
-                                        for key, value in data.items():
-                                            if key == "frames":
-                                                continue
-                                            if key == "actions":
-                                                if "{{actions}}" in run.text:
-                                                    run.text = run.text.replace("{{actions}}", data["actions_text"])
-                                                continue
-                                            if f"{{{{{key}}}}}" in run.text:
-                                                run.text = run.text.replace(f"{{{{{key}}}}}", str(value))
+                                    self._replace_placeholders_in_pptx_paragraph(para, data)
 
                 # {{frames}} 플레이스홀더에 이미지 삽입
                 for shape in slide.shapes:

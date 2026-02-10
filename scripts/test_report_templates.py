@@ -286,6 +286,46 @@ def test_docx_template():
                                 para.add_run(new_text)
                             full_text = new_text
 
+    # 머리글/바닥글 플레이스홀더 치환
+    for section in doc.sections:
+        # 바닥글 처리
+        for footer in [section.footer, section.first_page_footer, section.even_page_footer]:
+            if footer is not None:
+                for para in footer.paragraphs:
+                    full_text = ''.join([run.text for run in para.runs])
+                    new_text = full_text
+                    for key, value in sample_data.items():
+                        if key == "frames":
+                            continue
+                        placeholder = f"{{{{{key}}}}}"
+                        if placeholder in new_text:
+                            if key == "actions":
+                                value = sample_data["actions_text"]
+                            new_text = new_text.replace(placeholder, str(value))
+                    if new_text != full_text and para.runs:
+                        para.runs[0].text = new_text
+                        for run in para.runs[1:]:
+                            run.text = ""
+
+        # 머리글 처리
+        for header in [section.header, section.first_page_header, section.even_page_header]:
+            if header is not None:
+                for para in header.paragraphs:
+                    full_text = ''.join([run.text for run in para.runs])
+                    new_text = full_text
+                    for key, value in sample_data.items():
+                        if key == "frames":
+                            continue
+                        placeholder = f"{{{{{key}}}}}"
+                        if placeholder in new_text:
+                            if key == "actions":
+                                value = sample_data["actions_text"]
+                            new_text = new_text.replace(placeholder, str(value))
+                    if new_text != full_text and para.runs:
+                        para.runs[0].text = new_text
+                        for run in para.runs[1:]:
+                            run.text = ""
+
     # 저장
     doc.save(output_path)
     print(f"✅ DOCX 생성 완료: {output_path}")
