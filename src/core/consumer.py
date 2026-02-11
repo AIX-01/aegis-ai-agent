@@ -195,6 +195,19 @@ class ConsumerPool:
 
                         # LangGraph 실행 (정밀 분석 서버 연동 등)
                         final_state = self.graph.invoke(initial_state)
+
+                        # run config 적용 예시(아래 코드 사용 시 위 final_state 주석 처리 필요)
+                        # run_config = {
+                        #     "run_name": f"{camera_id}-{risk_level}",
+                        #     "tags": [camera_id, risk_level, event_type],
+                        #     "metadata": {
+                        #         "camera_id": camera_id,
+                        #         "event_id": event_id,
+                        #         "risk_level": risk_level,
+                        #         "event_type": event_type,
+                        #     },
+                        # }
+                        # final_state = self.graph.invoke(initial_state, config=run_config)
                         self.total_processed += 1
                         
                         # 최종 결과 통계 업데이트

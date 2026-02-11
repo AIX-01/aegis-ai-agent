@@ -125,11 +125,12 @@ scripts/
 
 | 설정 | 기본값 | 설명 |
 |------|--------|------|
-| `mock_mode` | `True` | Mock 서버 사용 여부 |
 | `real_vlm` | `False` | 실제 VLM 서버 사용 |
 | `real_precision` | `False` | 실제 정밀 분석 서버 사용 |
 | `real_backend` | `False` | 실제 백엔드 서버 사용 |
-| `real_s3` | `False` | 실제 S3 서버 사용 |
+
+> `config.py`에서 `True`로 설정하면 CLI 플래그 없이도 항상 실제 서버를 사용합니다.
+> CLI 플래그(`--real-vlm` 등)는 `False` → `True` 전환만 가능하며, `True` → `False` 전환은 불가합니다.
 
 **RTSP/프레임 설정:**
 
@@ -739,32 +740,25 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 환경 변수 설정 (.env 파일)
+### 환경 변수 설정
 
 ```bash
-# OpenAI API 키 (정밀 분석, 검증, 임베딩에 사용)
-OPENAI_API_KEY=sk-your-openai-api-key
+cp .env.sample .env
 ```
 
----
+`.env` 파일을 열고 아래 값을 채워주세요:
 
-### CLI 옵션
+| 변수 | 설명 |
+|------|------|
+| `OPENAI_API_KEY` | OpenAI API 키 |
+| `LANGSMITH_TRACING` | LangSmith 추적 활성화 (`true` / `false`) |
+| `LANGSMITH_API_KEY` | LangSmith API 키 ([smith.langchain.com](https://smith.langchain.com)에서 발급) |
+| `LANGSMITH_PROJECT` | LangSmith 프로젝트명 |
 
-| 옵션 | 설명 | 기본값 |
-|------|------|--------|
-| `--no-mock` | 모든 컴포넌트를 실제 서버로 전환 | False |
-| `--real-vlm` | VLM만 실제 서버 사용 | False |
-| `--real-precision` | 정밀 분석만 OpenAI API 사용 | False |
-| `--real-backend` | 백엔드만 실제 서버 사용 | False |
-| `--workers N` | 컨슈머 워커 스레드 수 | 4 |
-| `--log-level LEVEL` | 로그 레벨 (DEBUG/INFO/WARNING/ERROR) | INFO |
+### 실행
 
----
-
-### 실행 명령어 예시
-
-#### 1. 전체 Mock 모드 (로컬 테스트)
 ```bash
+# 전체 Mock 모드 (기본값)
 python -m src.app
 ```
 - VLM: Mock 서버 (localhost:8001)
@@ -774,71 +768,10 @@ python -m src.app
 
 ---
 
-#### 2. OpenAI API만 실제 사용 (정밀 분석 + 검증)
-```bash
-python -m src.app --real-precision
-```
-- VLM: Mock 서버
-- **정밀 분석: OpenAI GPT-4.1-mini** (`config.openai_chat_model`)
-- **검증(Verification): OpenAI Vision API**
-- 백엔드: Mock 서버
-
-**사용되는 설정 (config.py):**
-```python
-openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-openai_chat_model: str = "gpt-4.1-mini"
-```
-
----
-
-#### 3. 실제 VLM 서버 사용
-```bash
+# 컴포넌트별 실제 서버 사용
 python -m src.app --real-vlm
-```
-- **VLM: 실제 서버** (`config._real_vlm_endpoint`)
-- 정밀 분석: Mock 서버
-- 백엔드: Mock 서버
-
-**config.py에서 설정:**
-```python
-_real_vlm_endpoint: str = "https://your-vlm-server/v1"
-_real_vlm_api_key: str = "your-vlm-api-key"
-_real_vlm_model_id: str = "your-model-id"
-```
-
----
-
-#### 4. 실제 백엔드 서버 사용
-```bash
-python -m src.app --real-backend
-```
-- VLM: Mock 서버
-- 정밀 분석: Mock 서버
-- **백엔드: 실제 Spring Boot 서버**
-
-**config.py에서 설정:**
-```python
-_real_backend_create_endpoint: str = "http://localhost:8080/internal/agent/events"
-_real_backend_update_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/analysis"
-_real_backend_clip_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/clip"
-_real_backend_report_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/report"
-```
-
----
-
-#### 5. 하이브리드 모드 (조합)
-```bash
-# VLM 실제 + 정밀분석 OpenAI + 백엔드 Mock
-python -m src.app --real-vlm --real-precision
-
-# VLM Mock + 정밀분석 OpenAI + 백엔드 실제
-python -m src.app --real-precision --real-backend
-
-# 모든 컴포넌트 실제 서버
-python -m src.app --no-mock
-```
-
----
+python -m src.app --real-vlm --real-backend
+python -m src.app --real-vlm --real-precision --real-backend
 
 #### 6. 디버그 모드
 ```bash

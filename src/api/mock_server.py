@@ -54,10 +54,10 @@ class PrecisionAnalysisResponse(BaseModel):
 # 백엔드 서버 모델 (DATA-MODEL.md 기준)
 # =========================
 class EventCreationRequest(BaseModel):
-    camera_id: str
+    camera_id: str = Field(alias="cameraId")
     risk: RiskLevel
     type: str
-    occurred_at: str
+    occurred_at: str = Field(alias="occurredAt")
 
 class EventCreationResponse(BaseModel):
     event_id: str
@@ -276,6 +276,25 @@ class MockBackendServer:
             self.logger.info(f"✅ [보고서 로컬 저장 완료] {file_path} ({len(body)} bytes)")
 
             return {"status": "saved", "path": file_path, "size": len(body)}
+
+        # 클립 업로드 URL 발급
+        @self.app.get("/api/vlm-results/{event_id}/clip/upload-url")
+        async def get_clip_upload_url(event_id: str):
+            upload_url = f"http://localhost:{self.port}/api/vlm-results/{event_id}/clip/upload"
+            self.logger.info(f"[클립 URL 발급] Event ID: {event_id}")
+            return {"uploadUrl": upload_url}
+
+        # 클립 업로드 수신
+        @self.app.put("/api/vlm-results/{event_id}/clip/upload", status_code=status.HTTP_200_OK)
+        async def upload_clip(event_id: str):
+            self.logger.info(f"[클립 업로드 수신] Event ID: {event_id}")
+            return {"status": "uploaded"}
+
+        # 클립 업로드 확인
+        @self.app.post("/api/vlm-results/{event_id}/clip/confirm", status_code=status.HTTP_200_OK)
+        async def confirm_clip(event_id: str):
+            self.logger.info(f"[클립 확정] Event ID: {event_id}")
+            return {"status": "confirmed"}
 
         @self.app.get("/health")
         async def health():
