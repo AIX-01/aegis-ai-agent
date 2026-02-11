@@ -224,13 +224,22 @@ def _record_actions_to_backend(event_id: str, actions_taken: List[Dict[str, Any]
         if tool_name == "search_manual":
             continue
 
+        # tool_name이 None인 경우 스킵 (AI 응답 메시지)
+        if tool_name is None or tool_name == "unknown":
+            continue
+
+        # action_{uuid} 형식에서 action_id 추출
+        action_id = None
+        if tool_name.startswith("action_"):
+            action_id = tool_name.replace("action_", "")
+
         try:
             _backend_client.record_event_action(
                 event_id=event_id,
-                action_id=None,  # 동적 Tool은 action_id가 없음
+                action_id=action_id,
                 input_params={"tool_name": tool_name},
                 output_result=result[:1000] if len(result) > 1000 else result,
-                success=True,
+                success="오류" not in result and "error" not in result.lower(),
                 executed_at=datetime.now().isoformat()
             )
         except Exception as e:
