@@ -21,7 +21,7 @@ class Config:
     # ===================================================================
     # >> 1. 실제 서버 주소 설정 (이 부분을 실제 운영 서버에 맞게 수정하세요)
     # ===================================================================
-    _real_vlm_endpoint: str = "https://apsj89ztypyzpr-8000.proxy.runpod.net/v1"
+    _real_vlm_endpoint: str = "https://ntm38sypf1injr-8000.proxy.runpod.net/v1"
     _real_vlm_api_key: str = "sk-IrR7Bwxtin0haWagUnPrBgq5PurnUz86"
     _real_vlm_model_id: str = "AIX-01/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit-3000steps-r64-b8-merged-16bit"
     # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨
@@ -36,6 +36,8 @@ class Config:
     _real_backend_update_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/analysis"
     # 생성된 영상 클립의 경로를 백엔드에 업데이트(CLIP UPDATE)하기 위해 사용
     _real_backend_clip_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/clip"
+    # 액션 실행 결과를 기록하기 위해 사용
+    _real_backend_action_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/actions"
 
     # ===================================================================
     # >> 2. 모드 설정 (컴포넌트별 True/False로 전환)
@@ -56,7 +58,8 @@ class Config:
     precision_endpoint: str = field(init=False)
     backend_create_endpoint: str = field(init=False)
     backend_update_endpoint: str = field(init=False)
-    backend_clip_endpoint: str = field(init=False) # 추가됨
+    backend_clip_endpoint: str = field(init=False)
+    backend_action_endpoint: str = field(init=False)
 
     # =========================================
     # 에이전트 API 서버 설정 (FastAPI)
@@ -241,17 +244,19 @@ JSON만 출력하세요."""
         else:
             self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
 
-        # 백엔드 엔드포인트 설정 (생성/갱신/클립 분리)
+        # 백엔드 엔드포인트 설정 (생성/갱신/클립/액션 분리)
         if self.real_backend:
             self.backend_create_endpoint = self._real_backend_create_endpoint
             self.backend_update_endpoint = self._real_backend_update_endpoint
             self.backend_clip_endpoint = self._real_backend_clip_endpoint
+            self.backend_action_endpoint = self._real_backend_action_endpoint
         else:
             # Mock 서버는 RESTful 규칙을 따르므로 기본 경로 설정
             base_url = f"http://localhost:{self.mock_backend_port}/api/vlm-results"
             self.backend_create_endpoint = base_url
             self.backend_update_endpoint = f"{base_url}/{{event_id}}/analysis"
             self.backend_clip_endpoint = f"{base_url}/{{event_id}}/clip"
+            self.backend_action_endpoint = f"{base_url}/{{event_id}}/actions"
 
         # LangSmith 추적 환경 변수 설정
         if self.langsmith_tracing and self.langsmith_api_key:

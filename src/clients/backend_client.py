@@ -26,8 +26,9 @@ class BackendClient:
         # 엔드포인트 분리
         self.create_endpoint = config.backend_create_endpoint
         self.update_endpoint_template = config.backend_update_endpoint
-        self.clip_endpoint_template = config.backend_clip_endpoint # 추가됨
-        
+        self.clip_endpoint_template = config.backend_clip_endpoint
+        self.action_endpoint_template = config.backend_action_endpoint
+
         self.timeout = config.backend_timeout
         self.max_retries = config.backend_max_retries
         self.retry_delay = config.backend_retry_delay
@@ -240,7 +241,7 @@ class BackendClient:
     ) -> bool:
         """
         이벤트에 대한 액션 실행 결과를 백엔드에 기록합니다.
-        POST /api/events/{event_id}/actions
+        POST /internal/agent/events/{event_id}/actions
 
         Args:
             event_id: 이벤트 ID
@@ -253,8 +254,7 @@ class BackendClient:
         Returns:
             성공 여부
         """
-        # /api/events/{event_id}/actions
-        endpoint = f"{self.create_endpoint.rsplit('/internal/agent', 1)[0]}/api/events/{event_id}/actions"
+        endpoint = self.action_endpoint_template.format(event_id=event_id)
 
         payload = {
             "actionId": action_id,
