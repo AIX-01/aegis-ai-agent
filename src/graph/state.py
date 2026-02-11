@@ -51,7 +51,16 @@ class AnalysisState(TypedDict):
     # =========================================
     # 메타 데이터
     # =========================================
-    actions: list                      # [S→M] 대응 조치 리스트 [{type, description}, ...]
+    # actions: 대응 조치 리스트 (백엔드 EventAction 테이블과 일치)
+    # 형식: [
+    #   {
+    #     "type": "field_action" | "emergency_call",  # 조치 유형
+    #     "action": "BROADCAST" | "112_POLICE" | ..., # 실행된 액션 코드
+    #     "log": "상세 설명 텍스트",                    # 액션 로그
+    #     "triggered_at": "2026-02-11T22:30:00"       # 발동 시각 (ISO 8601)
+    #   }, ...
+    # ]
+    actions: list                      # [S→M] 대응 조치 리스트 [{type, action, log, triggered_at}, ...]
     rag_references: list               # [S→M] 검색된 참조 문서들 [{type, content}, ...]
     embedding_stored: bool             # [M]   이벤트 임베딩 저장 여부 (store_embedding 노드)
     report_updated: bool               # [S→M] 보고서 백엔드 갱신 여부 (response_agent 서브그래프)

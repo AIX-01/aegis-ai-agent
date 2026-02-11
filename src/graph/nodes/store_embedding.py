@@ -25,7 +25,7 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
     카메라 위치, 발생 시각, 이벤트 유형 등으로도 검색이 가능합니다.
 
     Args:
-        state: 현재 분석 상태 (event_id, summary, event_type, risk_score 등)
+        state: 현재 분석 상태 (event_id, summary, event_type, risk_score, actions 등)
         config: 시스템 설정
 
     Returns:
@@ -40,6 +40,14 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
     risk_score = state.get("risk_score", 0.0)
     risk_level = state.get("risk_level", "ABNORMAL")
     occurred_at = state.get("occurred_at")
+
+    # =========================================
+    # [추가] response_agent에서 생성된 대응 조치 가져오기
+    # =========================================
+    # actions는 response_agent의 extract_actions 노드에서 생성됨
+    # 형식: [{"type": str, "action": str, "log": str, "triggered_at": str}, ...]
+    # 백엔드 EventAction 테이블과 동일한 구조
+    actions = state.get("actions", [])
 
     logger.info(f"[{camera_uuid}] 이벤트 임베딩 저장 시작... (Event ID: {event_id})")
 
@@ -127,6 +135,17 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
             "summary": summary,
             "occurred_at": occurred_at.isoformat() if occurred_at else None,
             "text_embedded": text_to_embed,       # 임베딩된 원본 텍스트 (기록용)
+            # =========================================
+            # [추가] 대응 조치 정보 (시나리오 1, 2 활용)
+            # =========================================
+            # response_agent에서 생성된 대응 조치 리스트
+            # 형식: [{"type": str, "action": str, "log": str, "triggered_at": str}, ...]
+            # 백엔드 EventAction 테이블과 동일한 구조
+            #
+            # 활용:
+            # - 시나리오 1: 유사 상황에서 어떤 대응을 했는지 참조
+            # - 시나리오 2: 장소별 대응 이력 패턴 분석
+            "actions": actions,
         }
 
         # 문서 추가
@@ -138,7 +157,7 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
             text_field="text_embedded"
         )
 
-        logger.info(f"[{camera_uuid}] 이벤트 임베딩 저장 완료 (Event ID: {event_id})")
+        logger.info(f"[{camera_uuid}] 이벤트 임베딩 저장 완료 (Event ID: {event_id}, Actions: {len(actions)}개)")
         return {"embedding_stored": True}
 
     except Exception as e:

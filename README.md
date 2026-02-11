@@ -48,6 +48,7 @@ src/
 │   ├── producer.py             # RTSP 패킷 수신 스레드 (PyAV 기반)
 │   ├── packet_buffer.py        # 30초 원형 패킷 버퍼 (키프레임 백트래킹)
 │   ├── muxer.py                # MP4 Muxing (faststart, edts 제거, 해상도 패치)
+│   ├── approval_manager.py     # Human-in-the-Loop 승인 관리자 (SSE + REST API)
 │   ├── consumer.py             # 분석 워커 풀 (VLM → 클립 생성 → LangGraph)
 │   ├── queue_manager.py        # 오버플로우 보호 작업 큐
 │   ├── windowing.py            # 프레임 슬라이딩 윈도우 생성기
@@ -65,7 +66,7 @@ src/
 │   │   └── store_embedding.py  # 이벤트 임베딩 저장 (response_agent 완료 후 순차 실행)
 │   ├── subgraphs/
 │   │   ├── __init__.py
-│   │   └── response_agent.py   # ReAct Agent (대응 조치 + 보고서 생성 + 업로드)
+│   │   └── response_agent.py   # ReAct Agent (지식 검색 + 대응 조치 + 보고서 생성 + 업로드)
 │   └── edges/
 │       ├── __init__.py
 │       └── routers.py          # 조건부 분기 (analysis_router, verification_router)
@@ -77,8 +78,9 @@ src/
 └── tools/                      # LangChain 도구 및 유틸리티
     ├── __init__.py
     ├── embedding_tools.py      # 임베딩 도구 (텍스트→벡터 변환)
+    ├── manual_templates.py     # 대응 매뉴얼 템플릿 (이벤트 유형별)
     ├── search_tools.py         # 매뉴얼/사례 검색 (VectorStoreClient 사용)
-    └── response_tools.py       # 대응 도구 (LangChain Tool - response_agent용)
+    └── response_tools.py       # 대응 도구 (execute_field_action, emergency_call)
 
 templates/
 └── reports/                    # 보고서 템플릿
@@ -114,6 +116,9 @@ scripts/
 |--------|------|------|
 | GET | `/health` | 헬스 체크 |
 | GET | `/status` | 에이전트 상태 조회 |
+| GET | `/api/sse/approval` | Human-in-the-Loop SSE 스트림 (승인 요청 전송) |
+| POST | `/api/approval/{request_id}` | 긴급 신고 승인/거부 처리 |
+| GET | `/api/approval/pending` | 대기 중인 승인 요청 목록 조회 |
 
 ---
 
@@ -397,11 +402,33 @@ LangGraph 파이프라인의 상태 정의입니다.
 
 | 필드 | 타입 | 태그 | 설명 |
 |------|------|------|------|
-| actions | list | [S→M] | 대응 조치 리스트 [{type, description}, ...] |
+| actions | list | [S→M] | 대응 조치 리스트 [{type, action, log, triggered_at}, ...] |
 | rag_references | list | [S→M] | 검색된 참조 문서들 [{type, content}, ...] |
 | embedding_stored | bool | [M] | 이벤트 임베딩 저장 여부 |
 | report_updated | bool | [S→M] | 보고서 백엔드 갱신 여부 |
 | errors | List[str] | [M/S] | 에러 메시지 목록 |
+
+**actions 필드 상세 (백엔드 EventAction 테이블과 일치):**
+
+| 필드 | 타입 | 설명 | 예시 값 |
+|------|------|------|--------|
+| type | str | 조치 유형 | `field_action`, `emergency_call` |
+| action | str | 액션 코드 | `BROADCAST`, `112_POLICE` 등 |
+| log | str | 상세 로그 | 실행 결과 마크다운 텍스트 |
+| triggered_at | str | 발동 시각 (ISO 8601) | `2026-02-11T22:30:00` |
+
+**action 코드 목록:**
+
+| type | action 코드 | 설명 |
+|------|------------|------|
+| `field_action` | `BROADCAST` | CCTV 스피커 방송 |
+| `field_action` | `LIGHT_ON` | 현장 조명 점등 |
+| `field_action` | `PTZ_TRACK` | PTZ 카메라 추적 |
+| `field_action` | `SIREN` | 경고 사이렌 |
+| `emergency_call` | `112_POLICE` | 경찰 신고 |
+| `emergency_call` | `119_FIRE` | 소방/응급 신고 |
+| `emergency_call` | `SECURITY_TEAM` | 내부 보안팀 |
+| `emergency_call` | `MANAGEMENT` | 관리사무소 |
 
 **태그 설명:**
 - `[M]` = Main Graph에서만 사용
@@ -430,7 +457,10 @@ LangGraph 워크플로우를 빌드합니다.
 | 구분 | 동작 | 임베딩 시점 | 저장 여부 |
 |-----|------|-----------|----------|
 | **과거 사례** | `store_embedding` 노드에서 저장 | 사건 처리 완료 시 | ✅ Qdrant에 저장 |
-| **현재 사건 (검색용)** | `search_protocol_and_cases` 도구에서 검색 | 검색 시 실시간 | ❌ 저장 안 함 |
+| **현재 사건 (검색용)** | `search_knowledge` 노드에서 검색 | 검색 시 실시간 | ❌ 저장 안 함 |
+
+> **변경사항 (2026-02-11)**: 기존 `search_protocol_and_cases` 도구가 `search_knowledge` 노드로 분리되어
+> ReAct 루프 진입 전에 무조건 실행됩니다.
 
 #### 저장 흐름 (store_embedding)
 
@@ -467,25 +497,55 @@ Qdrant (past_cases 컬렉션) 저장
 | `occurred_at` | 발생 시각 |
 | `text_embedded` | 임베딩된 원본 텍스트 |
 
-#### 검색 흐름 (search_protocol_and_cases)
+#### 검색 흐름 (search_knowledge 노드)
 
 현재 사건과 유사한 **과거 사례**를 검색합니다.
 
+> **변경사항 (2026-02-11)**: 기존 `search_protocol_and_cases` 도구가 `search_knowledge` 노드로 분리되었습니다.
+> 이제 검색은 ReAct 루프 진입 전에 **무조건 실행**됩니다.
+
 ```
-[response_agent에서 LLM이 도구 호출 결정]
+[response_agent 서브그래프 진입]
     ↓
-LLM이 상황 컨텍스트(summary, camera_name 등)를 보고 query 파라미터 생성
+search_knowledge 노드 (무조건 실행)
     ↓
-search_protocol_and_cases(summary="상황요약", event_type=event_type, ...)
+검색 쿼리 구성: "상황: {summary} | 위치: {camera_name} {camera_location} | 유형: {event_type}"
     ↓
 query를 실시간 임베딩 (OpenAI Embedding API)
     ↓
 Qdrant (past_cases 컬렉션) 유사도 검색
     ↓
-유사한 과거 사례 반환 + 대응 매뉴얼 템플릿
+검색 결과를 state.rag_references, state.knowledge_context에 저장
+    ↓
+agent 노드로 전달 (LLM 프롬프트에 검색 결과 주입)
+    ↓
+LLM이 도구 호출 결정 (execute_field_action, emergency_call)
+    ↓
+should_continue() 라우터
+    │
+    ├─ field_action만 → tools 노드 → 바로 실행
+    │
+    └─ emergency_call 포함 → check_approval 노드 (Human-in-the-Loop)
+                               ↓
+                         SSE로 브라우저에 승인 요청 전송
+                               ↓
+                         모달에서 [승인]/[거부] 버튼 클릭
+                               ↓
+                         POST /api/approval/{request_id}
+                               ↓
+                         ┌─────┴─────┐
+                         ↓           ↓
+                      승인         거부/타임아웃
+                         ↓           ↓
+                      tools       skip_emergency
+                         ↓           ↓
+                      실행         스킵 메시지
 ```
 
-**참고:** query 값은 코드에 하드코딩되어 있지 않으며, LLM(GPT)이 Tool Calling으로 자동 결정합니다.
+**장점:**
+- 검색이 **100% 보장**됨 (LLM 판단에 의존하지 않음)
+- ReAct 루프 **1~2회 감소** → LLM API 비용 절감
+- 도구 호출 결정 왕복 시간 제거 → **응답 속도 향상**
 
 ---
 
@@ -496,13 +556,15 @@ Qdrant (past_cases 컬렉션) 유사도 검색
 response_agent에서 사용하는 LangChain Tool들을 정의합니다.
 
 **create_response_tools(config) 함수:**
-- 반환: `[search_protocol_and_cases, execute_field_action, emergency_call]`
+- 반환: `[execute_field_action, emergency_call]`
 
 | 도구 | 설명 | 파라미터 |
 |------|------|----------|
-| `search_protocol_and_cases` | 대응 매뉴얼 및 과거 사례 검색 | summary, event_type, camera_name, camera_location |
 | `execute_field_action` | 현장 물리적 조치 실행 | action_name (BROADCAST/LIGHT_ON/PTZ_TRACK/SIREN), camera_id, message_content |
 | `emergency_call` | 긴급 신고 접수 | agency_type (112_POLICE/119_FIRE/SECURITY_TEAM/MANAGEMENT), situation_report |
+
+> **참고**: `search_protocol_and_cases`는 `search_knowledge` 노드로 분리되어 
+> ReAct 루프 진입 전에 무조건 실행됩니다. (2026-02-11 변경)
 
 **사용 예시:**
 ```python
@@ -511,8 +573,164 @@ from src.config import Config
 
 config = Config()
 tools = create_response_tools(config)
-# tools = [search_protocol_and_cases, execute_field_action, emergency_call]
+# tools = [execute_field_action, emergency_call]
 ```
+
+---
+
+### Human-in-the-Loop (긴급 신고 승인 시스템)
+
+> **추가됨 (2026-02-11)**: `emergency_call` 도구 실행 전에 사용자 승인을 받는 기능
+
+#### 개요
+
+긴급 신고(112, 119 등)는 실행 전에 사용자의 승인이 필요합니다. 
+LangGraph Interrupt 없이 **SSE + REST API + threading.Event** 방식으로 구현되어 있습니다.
+
+**특징:**
+- LangGraph 체크포인터 불필요
+- 브라우저와 직접 통신 (백엔드 경유 안 함)
+- 60초 타임아웃 (응답 없으면 자동 스킵)
+- 메모리 기반 상태 관리 (5분 후 자동 정리)
+
+#### 아키텍처
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         AI Agent (Python/FastAPI)                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  [LangGraph 실행 중]                                                     │
+│       │                                                                  │
+│       ▼                                                                  │
+│  emergency_call 도구 호출 감지                                            │
+│       │                                                                  │
+│       ▼                                                                  │
+│  ┌────────────────────┐     ┌────────────────────┐                      │
+│  │ check_approval_node│────▶│ approval_manager   │                      │
+│  │ (response_agent.py)│     │ (싱글톤)            │                      │
+│  └────────────────────┘     └─────────┬──────────┘                      │
+│       │                               │                                  │
+│       │                               │ request_approval()               │
+│       │                               ▼                                  │
+│       │                     ┌────────────────────┐                      │
+│       │                     │ broadcast_sse_     │ ─── SSE ───▶ 브라우저 │
+│       │                     │   event()          │                      │
+│       │                     └────────────────────┘                      │
+│       │                                                                  │
+│       ▼                                                                  │
+│  threading.Event.wait(60초)  ◀─── POST /api/approval/{id} ─── 브라우저   │
+│       │                                                                  │
+│       ▼                                                                  │
+│  승인: tools 노드 → emergency_call 실행                                   │
+│  거부: skip_emergency 노드 → 스킵 메시지 생성                              │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### UUID 관리
+
+| 필드 | 생성 위치 | 용도 |
+|------|----------|------|
+| `request_id` | `approval_manager.request_approval()` | 승인 요청 고유 식별자 (uuid.uuid4()) |
+| `event_id` | Spring Boot 백엔드 | 이벤트(사건) 식별 |
+| `user_id` | 프론트엔드 (로그인 사용자) | 누가 승인/거부했는지 |
+
+**UUID 저장:**
+- `approval_manager._requests`: Dict[request_id → ApprovalRequest]
+- `approval_manager._event_requests`: Dict[event_id → List[request_id]]
+- 메모리에만 저장 (서버 재시작 시 손실)
+- `cleanup_old_requests()`로 5분 후 자동 정리
+
+#### API 명세
+
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/api/sse/approval` | SSE 스트림 (승인 요청 수신용) |
+| POST | `/api/approval/{request_id}` | 승인/거부 처리 |
+| GET | `/api/approval/pending` | 대기 중인 요청 목록 |
+
+**POST /api/approval/{request_id} 요청 Body:**
+```json
+{
+    "approved": true,       // true: 승인, false: 거부
+    "user_id": "user-uuid"  // 승인/거부한 사용자 ID (선택)
+}
+```
+
+**SSE 이벤트 타입:**
+
+| 이벤트 | 설명 | 데이터 |
+|--------|------|--------|
+| `connected` | 연결 성공 | `{"status": "connected"}` |
+| `heartbeat` | 연결 유지 (30초마다) | `{"timestamp": ...}` |
+| `approval_request` | 승인 요청 | 아래 참조 |
+| `approval_timeout` | 타임아웃 | `{"request_id": "..."}` |
+
+**approval_request 이벤트 데이터:**
+```json
+{
+    "request_id": "uuid",
+    "event_id": "이벤트 ID",
+    "camera_id": "카메라 ID",
+    "camera_name": "카메라 이름",
+    "camera_location": "카메라 위치",
+    "action_type": "emergency_call",
+    "agency_name": "경찰청 112",
+    "situation_report": "상황 보고 내용",
+    "status": "pending",
+    "created_at": "2026-02-11T12:00:00"
+}
+```
+
+#### 프론트엔드 연동 예시
+
+```javascript
+// 1. SSE 연결
+const eventSource = new EventSource('http://[AI-Agent주소]/api/sse/approval');
+
+// 2. 승인 요청 수신 → 모달 표시
+eventSource.addEventListener('approval_request', (e) => {
+    const data = JSON.parse(e.data);
+    showApprovalModal(data);  // 모달 표시
+});
+
+// 3. 타임아웃 처리
+eventSource.addEventListener('approval_timeout', (e) => {
+    const data = JSON.parse(e.data);
+    closeApprovalModal(data.request_id);  // 모달 닫기
+});
+
+// 4. 승인 버튼 클릭
+async function approveEmergencyCall(requestId) {
+    await fetch(`http://[AI-Agent주소]/api/approval/${requestId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved: true, user_id: currentUserId })
+    });
+    closeApprovalModal(requestId);
+}
+
+// 5. 거부 버튼 클릭
+async function rejectEmergencyCall(requestId) {
+    await fetch(`http://[AI-Agent주소]/api/approval/${requestId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved: false, user_id: currentUserId })
+    });
+    closeApprovalModal(requestId);
+}
+```
+
+#### 관련 파일
+
+| 파일 | 역할 |
+|------|------|
+| `src/core/approval_manager.py` | 승인 요청/응답 관리 (싱글톤) |
+| `src/app.py` | SSE 엔드포인트 + REST API |
+| `src/graph/subgraphs/response_agent.py` | `check_approval_node`, `skip_emergency_call_node` |
+
+---
 
 #### tools/embedding_tools.py - 임베딩 도구
 
@@ -545,13 +763,14 @@ VectorStoreClient를 사용하여 Qdrant에서 유사 문서를 검색합니다.
                                                     ↑
 [현재 사건 D]                                       │
     │                                               │
-    ├─ 1. response_agent ─→ search_protocol_and_cases ─┘ (과거 사례 검색)
+    ├─ 1. response_agent ─→ search_knowledge ───────┘ (과거 사례 검색, 무조건 실행)
     │         ↓
     └─ 2. store_embedding ─→ Qdrant 저장 (미래 검색용)
 ```
 
 **핵심 포인트:**
 - `response_agent` → `store_embedding` **순차 실행** (병렬 아님)
+- `search_knowledge` 노드가 **무조건 실행**되어 검색 보장
 - 검색이 먼저 수행되고, 저장이 나중에 수행됨
 - 따라서 **현재 사건은 검색 결과에 포함되지 않음** (의도된 설계)
 - 현재 사건은 처리 완료 후 저장되어 **미래 유사 사건 발생 시** 검색에 활용됨
@@ -562,10 +781,13 @@ VectorStoreClient를 사용하여 Qdrant에서 유사 문서를 검색합니다.
 
 #### 현재 상태 및 성능 이슈
 
-`search_protocol_and_cases` 도구는 **과거 사례 검색**과 **대응 매뉴얼 조회**를 수행합니다.
+`search_knowledge` 노드는 **과거 사례 검색**과 **대응 매뉴얼 조회**를 수행합니다.
+
+> **변경사항 (2026-02-11)**: 기존 `search_protocol_and_cases` 도구가 노드로 분리되어
+> ReAct 루프 진입 전에 무조건 실행됩니다.
 
 ```
-search_protocol_and_cases 호출 시 내부 흐름:
+search_knowledge 노드 실행 시 내부 흐름:
 │
 ├── 1. 과거 사례 검색 (VectorStoreClient) ⚠️ 느림 (20-30초)
 │   └── query 텍스트
@@ -818,8 +1040,18 @@ PATCH /internal/agent/events/{event_id}/analysis
     "generated_at": "2026-02-09T14:35:00"
   },
   "actions": [
-    {"type": "emergency_call", "description": "112 긴급 신고 완료"},
-    {"type": "field_action", "description": "보안팀 현장 출동 지시"}
+    {
+      "type": "emergency_call",
+      "action": "112_POLICE",
+      "log": "## 긴급 신고 접수 결과\n\n- 신고 기관: 경찰청 112\n- 접수 시각: 2026-02-11 22:30:15\n- 상태: ✅ 접수 완료",
+      "triggered_at": "2026-02-11T22:30:15"
+    },
+    {
+      "type": "field_action",
+      "action": "BROADCAST",
+      "log": "## 현장 조치 실행 결과\n\n- 액션: BROADCAST\n- 대상 카메라: camera-001\n- 상태: ✅ 성공",
+      "triggered_at": "2026-02-11T22:30:00"
+    }
   ]
 }
 ```
@@ -902,13 +1134,25 @@ graph TD
         
         subgraph SubAgent["18. response_agent (ReAct Agent 서브그래프)"]
             direction TB
+            SA_Search["지식 검색<br>(search_knowledge)<br>매뉴얼 + 과거 사례"]
             SA_Agent["LLM Agent"]
-            SA_Tools["도구 실행<br>(search_protocol_and_cases,<br>execute_field_action,<br>emergency_call)"]
+            SA_Router{"도구 분기<br>(should_continue)"}
+            SA_Check["승인 확인<br>(check_approval)<br>Human-in-the-Loop"]
+            SA_Approval{"승인 결과<br>(approval_router)"}
+            SA_Tools["도구 실행<br>(execute_field_action,<br>emergency_call)"]
+            SA_Skip["스킵<br>(skip_emergency)"]
             SA_Report["보고서 생성<br>(generate_report)"]
             SA_UpdateBackend["백엔드 갱신<br>(update_backend)"]
             
-            SA_Agent -- "도구 호출" --> SA_Tools
-            SA_Tools -- "결과 반환" --> SA_Agent
+            SA_Search --> SA_Agent
+            SA_Agent --> SA_Router
+            SA_Router -- "field_action만" --> SA_Tools
+            SA_Router -- "emergency_call 포함" --> SA_Check
+            SA_Check -- "SSE → 브라우저" --> SA_Approval
+            SA_Approval -- "승인" --> SA_Tools
+            SA_Approval -- "거부/타임아웃" --> SA_Skip
+            SA_Tools --> SA_Agent
+            SA_Skip --> SA_Agent
             SA_Agent -- "완료" --> SA_Report
             SA_Report --> SA_UpdateBackend
         end
@@ -1208,20 +1452,38 @@ graph TD
         
         subgraph SubAgent["18. response_agent (ReAct Agent 서브그래프)"]
             direction TB
+            SA_Search["지식 검색<br>(search_knowledge)"]:::proc
             SA_Agent["LLM Agent"]:::proc
-            SA_Tools["도구 실행"]:::proc
+            SA_Router{"도구 분기<br>(should_continue)"}:::router
+            SA_Check["승인 확인<br>(check_approval)<br>Human-in-the-Loop"]:::proc
+            SA_Approval{"승인 결과<br>(approval_router)"}:::router
+            SA_Tools["도구 실행<br>(execute_field_action,<br>emergency_call)"]:::proc
+            SA_Skip["스킵<br>(skip_emergency)"]:::proc
             SA_Extract["조치 추출"]:::proc
             SA_Report["보고서 생성"]:::proc
             SA_UpdateBackend["백엔드 갱신"]:::proc
             
             D_Context[("상황 정보<br>event_type, summary,<br>risk_level")]:::data
-            D_ToolResult[("검색 결과<br>매뉴얼, 과거사례,<br>현장조치, 신고결과")]:::data
+            D_Knowledge[("검색 결과<br>매뉴얼, 과거사례")]:::data
+            D_ToolResult[("조치 결과<br>현장조치, 신고결과")]:::data
             D_Actions[("대응 조치<br>field_action, emergency_call")]:::data
+            D_SSE[("SSE 이벤트<br>approval_request")]:::data
+            D_REST[("REST API<br>POST /api/approval")]:::data
             
-            D_Context --> SA_Agent
-            SA_Agent -- "도구 호출" --> SA_Tools
+            D_Context --> SA_Search
+            SA_Search -.-> D_Knowledge
+            D_Knowledge --> SA_Agent
+            SA_Agent --> SA_Router
+            SA_Router -- "field_action만" --> SA_Tools
+            SA_Router -- "emergency_call 포함" --> SA_Check
+            SA_Check -.-> D_SSE
+            D_SSE -. "브라우저" .-> D_REST
+            D_REST -.-> SA_Approval
+            SA_Approval -- "승인" --> SA_Tools
+            SA_Approval -- "거부/타임아웃" --> SA_Skip
             SA_Tools -.-> D_ToolResult
             D_ToolResult --> SA_Agent
+            SA_Skip --> SA_Agent
             SA_Agent -- "완료" --> SA_Extract
             SA_Extract --> D_Actions
             D_Actions --> SA_Report
@@ -1253,7 +1515,8 @@ graph TD
 | `graph/subgraphs/response_agent.py` | `generate_report_node()` | ✅ 완료 | 보고서 생성 + Mock 서버 업로드 |
 | `tools/response_tools.py` | `execute_field_action()` | ⚠️ Mock | CCTV 방송/조명/PTZ/사이렌 제어 (Mock 응답) |
 | `tools/response_tools.py` | `emergency_call()` | ⚠️ Mock | 112/119/보안팀 신고 (Mock 응답) |
-| `tools/response_tools.py` | `search_protocol_and_cases()` | ⚠️ 일부 Mock | 과거 사례는 Qdrant 검색, 매뉴얼은 하드코딩 |
+| `tools/response_tools.py` | `execute_field_action()`, `emergency_call()` | ⚠️ Mock | 현장 조치 및 긴급 신고 도구 |
+| `graph/subgraphs/response_agent.py` | `search_knowledge_node()` | ✅ 완료 | 매뉴얼/과거 사례 검색 노드 |
 | `clients/vector_store_client.py` | `VectorStoreClient` | ✅ 완료 | Qdrant 연동 (store_embedding에서 사용) |
 | `clients/verification_client.py` | `VerificationClient` | ✅ 완료 | OpenAI Vision API 기반 검증 |
 | `graph/nodes/verification.py` | `verification_node()` | ✅ 완료 | VerificationClient를 사용한 검증 노드 |
@@ -1281,3 +1544,47 @@ graph TD
 |------|------|
 | PyAV/OpenCV 충돌 | AVFFrameReceiver 중복 경고 (기능 영향 없음) |
 | Chromium 미지원 | H.264 라이선스 문제. Chrome/Safari는 정상 |
+
+---
+
+## 변경 이력
+
+### 2026-02-11
+
+**Human-in-the-Loop 승인 시스템 추가**
+
+- `emergency_call` 도구 실행 전에 사용자 승인을 받는 기능 추가
+- LangGraph Interrupt 없이 **SSE + REST API + threading.Event** 방식으로 구현
+- 구현 방식:
+  - 브라우저와 직접 통신 (백엔드 경유 안 함)
+  - `request_id`는 AI Agent에서 `uuid.uuid4()`로 생성 및 관리
+  - 메모리 기반 상태 관리 (5분 후 자동 정리)
+  - 60초 타임아웃 (응답 없으면 자동 스킵)
+- API 엔드포인트:
+  - `GET /api/sse/approval`: SSE 스트림 (승인 요청 전송)
+  - `POST /api/approval/{request_id}`: 승인/거부 처리
+  - `GET /api/approval/pending`: 대기 중인 요청 목록
+
+**추가/변경된 파일:**
+- `src/core/approval_manager.py`: 승인 관리자 (신규)
+- `src/app.py`: SSE 엔드포인트 + REST API 추가
+- `src/graph/subgraphs/response_agent.py`: `check_approval_node`, `skip_emergency_call_node`, `approval_router` 추가
+
+---
+
+**`search_protocol_and_cases` 노드 분리**
+
+- `search_protocol_and_cases` 도구를 `search_knowledge` 노드로 분리
+- ReAct 루프 진입 전에 매뉴얼/과거 사례 검색이 **무조건 실행**되도록 변경
+- 기존 문제점:
+  - LLM이 도구 호출을 건너뛸 수 있어 실행이 보장되지 않았음
+  - `iteration >= 5` 제한으로 검색 없이 종료될 수 있었음
+- 개선 효과:
+  - 검색 실행 **100% 보장**
+  - ReAct 루프 1~2회 감소 → LLM API **비용 절감**
+  - 도구 호출 결정 왕복 시간 제거 → **응답 속도 향상**
+
+**변경된 파일:**
+- `src/graph/subgraphs/response_agent.py`: `search_knowledge_node()` 추가, 워크플로우 수정
+- `src/tools/response_tools.py`: `search_protocol_and_cases` 도구 제거
+

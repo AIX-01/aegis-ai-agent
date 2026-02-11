@@ -2,9 +2,12 @@
 대응 조치(Response) 관련 LangChain 도구 모음
 
 response_agent에서 사용하는 도구들을 정의합니다:
-- search_protocol_and_cases: 대응 매뉴얼 및 과거 사례 검색
-- execute_field_action: 현장 물리적 조치 실행
-- emergency_call: 긴급 신고 접수
+- execute_field_action: 현장 물리적 조치 실행 (방송, 조명, PTZ, 사이렌)
+- emergency_call: 긴급 신고 접수 (112, 119, 보안팀)
+
+[참고] search_protocol_and_cases는 search_knowledge 노드로 분리되어
+response_agent 서브그래프에서 ReAct 루프 진입 전에 무조건 실행됩니다.
+(파일 위치: src/graph/subgraphs/response_agent.py)
 
 사용 예시:
     from src.tools.response_tools import create_response_tools
@@ -14,7 +17,7 @@ response_agent에서 사용하는 도구들을 정의합니다:
     tools = create_response_tools(config)
 
     # tools는 LangChain 도구 리스트로 반환됩니다.
-    # [search_protocol_and_cases, execute_field_action, emergency_call]
+    # [execute_field_action, emergency_call]
 """
 import logging
 from datetime import datetime
@@ -32,131 +35,28 @@ def create_response_tools(config: "Config"):
     """
     대응 에이전트가 사용할 도구들을 생성합니다.
 
+    [참고] search_protocol_and_cases는 search_knowledge 노드로 분리되어
+    ReAct 루프 진입 전에 무조건 실행됩니다. 따라서 도구 목록에서 제외됩니다.
+
     Args:
         config: Config 인스턴스 (Qdrant, OpenAI 설정 포함)
 
     Returns:
-        LangChain 도구 리스트 [search_protocol_and_cases, execute_field_action, emergency_call]
+        LangChain 도구 리스트 [execute_field_action, emergency_call]
     """
 
-    @tool
-    def search_protocol_and_cases(
-        summary: str,
-        event_type: str,
-        camera_name: str = "",
-        camera_location: str = ""
-    ) -> str:
-        """
-        지식 검색 도구: 과거 유사 사례와 표준 대응 매뉴얼을 검색합니다.
-
-        Args:
-            summary: 상황 요약 (예: "1층 로비에서 남성이 쓰러져 있음") - 검색 우선순위 가장 높음
-            event_type: 사건 유형 (ASSAULT, BURGLARY, DUMP, SWOON, VANDALISM)
-            camera_name: 카메라 이름 (예: "주차장 A동")
-            camera_location: 카메라 위치 (예: "1층 입구")
-
-        Returns:
-            해당 사건에 대한 단계별 대응 지침, 법적 근거, 과거 유사 처리 결과
-        """
-        from ..clients.vector_store_client import VectorStoreClient
-
-        # =========================================
-        # 임베딩용 검색 텍스트 구성
-        # =========================================
-        # 이 텍스트가 OpenAI Embedding API를 통해 1536차원 벡터로 변환되어
-        # Qdrant에 저장된 과거 사례들의 vector와 유사도 비교됩니다.
-        #
-        # [검색 흐름]
-        # query (문자열)
-        #     ↓
-        # OpenAI text-embedding-3-small 모델
-        #     ↓
-        # query_vector: [0.012, -0.034, ...] (1536차원)
-        #     ↓
-        # Qdrant에서 저장된 vector들과 코사인 유사도 비교
-        #     ↓
-        # 유사도 높은 순으로 결과 반환
-        #
-        # [우선순위]
-        # summary가 가장 앞에 배치되어 검색 시 가장 높은 영향력을 가짐
-        # (임베딩 모델은 텍스트 앞부분에 더 높은 가중치 부여)
-        #
-        # [저장 시와 동일한 필드 사용]
-        # - summary: 상황 요약 (우선순위 1)
-        # - camera_name + camera_location: 위치 정보 (우선순위 2)
-        # - event_type: 이벤트 유형 (우선순위 3)
-        # =========================================
-        query_parts = []
-
-        # summary가 가장 중요하므로 맨 앞에 배치 (임베딩 시 앞부분이 더 큰 영향)
-        if summary:
-            query_parts.append(f"상황: {summary}")
-
-        # 부가 정보 (카메라 정보)
-        if camera_name or camera_location:
-            location_info = f"{camera_name} {camera_location}".strip()
-            if location_info:
-                query_parts.append(f"위치: {location_info}")
-
-        # 이벤트 유형
-        if event_type:
-            query_parts.append(f"유형: {event_type}")
-
-        # 최종 검색 쿼리 구성
-        # 예시: "상황: 1층 로비에서 남성 2인이 폭행 중 | 위치: 주차장 A동 1층 입구 | 유형: ASSAULT"
-        query = " | ".join(query_parts) if query_parts else summary
-
-        logger.info(f"[Tool] search_protocol_and_cases 호출: query='{query[:80]}...', event_type={event_type}")
-
-        result_text = ""
-
-        # =========================================
-        # 과거 사례 검색 (벡터 유사도 + 필터링)
-        # =========================================
-        # - query: 벡터 유사도 검색 (임베딩 필수)
-        # - filters: 메타데이터 필터링 (임베딩 불필요, 정확히 일치)
-        # =========================================
-        try:
-            client = VectorStoreClient(config)
-
-            if client.collection_exists("past_cases"):
-                past_results = client.search(
-                    collection_name="past_cases",
-                    query=query,                                    # 벡터 유사도 검색
-                    limit=3,
-                    filters={"event_type": event_type} if event_type else None  # 메타데이터 필터링
-                )
-
-                if past_results:
-                    result_text += "## 과거 유사 사례\n\n"
-                    for i, result in enumerate(past_results, 1):
-                        payload = result.get("payload", {})
-                        score = result.get("score", 0)
-                        result_text += f"### 사례 {i} (유사도: {score:.2f})\n"
-                        result_text += f"- 카메라: {payload.get('camera_name', '')} ({payload.get('camera_location', '')})\n"
-                        result_text += f"- 이벤트: {payload.get('event_type', '')}\n"
-                        result_text += f"- 발생시각: {payload.get('occurred_at', '')}\n"
-                        result_text += f"- 상황: {payload.get('summary', '')}\n\n"
-                else:
-                    result_text += "## 과거 유사 사례\n검색 결과 없음\n\n"
-            else:
-                result_text += "## 과거 유사 사례\n컬렉션이 존재하지 않습니다.\n\n"
-
-        except Exception as e:
-            logger.error(f"과거 사례 검색 실패: {e}")
-            result_text += f"## 과거 유사 사례\n검색 실패: {e}\n\n"
-
-        # =========================================
-        # 대응 매뉴얼 조회
-        # =========================================
-        # 매뉴얼은 manual_templates.py에 정의되어 있습니다.
-        # 현재는 하드코딩 방식이며, 매뉴얼 수가 20개 이상으로 증가하거나
-        # 동적 업데이트가 필요한 경우 Qdrant RAG로 전환을 검토합니다.
-        # =========================================
-        from .manual_templates import get_manual
-        result_text += get_manual(event_type)
-
-        return result_text
+    # =========================================
+    # [DEPRECATED] search_protocol_and_cases
+    # =========================================
+    # 이 도구는 search_knowledge 노드로 분리되었습니다.
+    # 노드로 분리한 이유:
+    # 1. LLM이 도구 호출을 건너뛸 수 있어 실행이 보장되지 않았음
+    # 2. ReAct 루프의 iteration 제한(5회)으로 검색 없이 종료될 수 있었음
+    # 3. 매뉴얼/과거 사례 검색은 대응 결정의 필수 전제 조건임
+    #
+    # 검색 로직은 src/graph/subgraphs/response_agent.py의
+    # search_knowledge_node() 함수에서 처리됩니다.
+    # =========================================
 
     @tool
     def execute_field_action(action_name: str, camera_id: str, message_content: str = None) -> str:
@@ -241,6 +141,9 @@ def create_response_tools(config: "Config"):
 """
         return mock_response
 
+    # =========================================
     # 생성된 도구 리스트 반환
-    return [search_protocol_and_cases, execute_field_action, emergency_call]
+    # =========================================
+    # search_protocol_and_cases는 노드로 분리되어 제외됨
+    return [execute_field_action, emergency_call]
 
