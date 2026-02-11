@@ -48,7 +48,6 @@ src/
 │   ├── producer.py             # RTSP 패킷 수신 스레드 (PyAV 기반)
 │   ├── packet_buffer.py        # 30초 원형 패킷 버퍼 (키프레임 백트래킹)
 │   ├── muxer.py                # MP4 Muxing (faststart, edts 제거, 해상도 패치)
-│   ├── approval_manager.py     # Human-in-the-Loop 승인 관리자 (SSE + REST API)
 │   ├── consumer.py             # 분석 워커 풀 (VLM → 클립 생성 → LangGraph)
 │   ├── queue_manager.py        # 오버플로우 보호 작업 큐
 │   ├── windowing.py            # 프레임 슬라이딩 윈도우 생성기
@@ -116,9 +115,8 @@ scripts/
 |--------|------|------|
 | GET | `/health` | 헬스 체크 |
 | GET | `/status` | 에이전트 상태 조회 |
-| GET | `/api/sse/approval` | Human-in-the-Loop SSE 스트림 (승인 요청 전송) |
-| POST | `/api/approval/{request_id}` | 긴급 신고 승인/거부 처리 |
-| GET | `/api/approval/pending` | 대기 중인 승인 요청 목록 조회 |
+
+> **Note**: Human-in-the-Loop 승인은 백엔드 API를 경유하여 처리됩니다. (아래 HITL 섹션 참조)
 
 ---
 
@@ -580,18 +578,18 @@ tools = create_response_tools(config)
 
 ### Human-in-the-Loop (긴급 신고 승인 시스템)
 
-> **추가됨 (2026-02-11)**: `emergency_call` 도구 실행 전에 사용자 승인을 받는 기능
+> **갱신됨 (2026-02-11)**: 백엔드 API 경유 방식으로 전면 개편
 
 #### 개요
 
-긴급 신고(112, 119 등)는 실행 전에 사용자의 승인이 필요합니다. 
-LangGraph Interrupt 없이 **SSE + REST API + threading.Event** 방식으로 구현되어 있습니다.
+긴급 신고(112, 119 등)는 실행 전에 사용자의 승인이 필요합니다.
+**백엔드 API 경유 방식**으로 구현되어 있으며, AI Agent는 백엔드에 승인 요청을 보내고 응답을 대기합니다.
 
 **특징:**
-- LangGraph 체크포인터 불필요
-- 브라우저와 직접 통신 (백엔드 경유 안 함)
-- 60초 타임아웃 (응답 없으면 자동 스킵)
-- 메모리 기반 상태 관리 (5분 후 자동 정리)
+- 백엔드 API 경유 (브라우저 직접 통신 없음)
+- event_actions DB 테이블과 매핑
+- 승인자/거절자 정보 포함 (userName, userMail)
+- 타임아웃 틀 유지 (백엔드에서 구현 가능)
 
 #### 아키텍처
 
@@ -606,129 +604,140 @@ LangGraph Interrupt 없이 **SSE + REST API + threading.Event** 방식으로 구
 │  emergency_call 도구 호출 감지                                            │
 │       │                                                                  │
 │       ▼                                                                  │
-│  ┌────────────────────┐     ┌────────────────────┐                      │
-│  │ check_approval_node│────▶│ approval_manager   │                      │
-│  │ (response_agent.py)│     │ (싱글톤)            │                      │
-│  └────────────────────┘     └─────────┬──────────┘                      │
-│       │                               │                                  │
-│       │                               │ request_approval()               │
-│       │                               ▼                                  │
-│       │                     ┌────────────────────┐                      │
-│       │                     │ broadcast_sse_     │ ─── SSE ───▶ 브라우저 │
-│       │                     │   event()          │                      │
-│       │                     └────────────────────┘                      │
-│       │                                                                  │
-│       ▼                                                                  │
-│  threading.Event.wait(60초)  ◀─── POST /api/approval/{id} ─── 브라우저   │
-│       │                                                                  │
-│       ▼                                                                  │
+│  ┌────────────────────┐                                                  │
+│  │ check_approval_node│                                                  │
+│  │ (response_agent.py)│                                                  │
+│  └─────────┬──────────┘                                                  │
+│            │                                                             │
+│            ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Step 1: create_action()                                          │    │
+│  │   POST /internal/agent/events/{eventId}/actions                  │    │
+│  │   Request:  {action, description}                                │    │
+│  │   Response: {actionId}                                           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│            │                                                             │
+│            ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Step 2: confirm_action() - 사용자 응답 대기                       │    │
+│  │   POST /internal/agent/events/{eventId}/actions/{actionId}/confirm│   │
+│  │   Request:  (없음)                                                │    │
+│  │   Response: {userId, userName, userMail, result}                  │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│            │                                                             │
+│            ▼                                                             │
 │  승인: tools 노드 → emergency_call 실행                                   │
 │  거부: skip_emergency 노드 → 스킵 메시지 생성                              │
+│            │                                                             │
+│            ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Step 3: update_action() - 도구 실행 결과 갱신                     │    │
+│  │   PATCH /internal/agent/events/{eventId}/actions/{actionId}      │    │
+│  │   Request:  {userId, action, description}                        │    │
+│  │   Response: {actionId}                                           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
 │                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Backend (Spring Boot)                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│  1. Action 생성 요청 수신 → event_actions 테이블 INSERT                   │
+│  2. 프론트엔드에 알림 (SSE, WebSocket 등 - 백엔드 담당)                    │
+│  3. 사용자 승인/거절 → event_actions 테이블 UPDATE                        │
+│  4. confirm API 응답 반환                                                 │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### UUID 관리
+#### 백엔드 API 스펙
 
-| 필드 | 생성 위치 | 용도 |
-|------|----------|------|
-| `request_id` | `approval_manager.request_approval()` | 승인 요청 고유 식별자 (uuid.uuid4()) |
-| `event_id` | Spring Boot 백엔드 | 이벤트(사건) 식별 |
-| `user_id` | 프론트엔드 (로그인 사용자) | 누가 승인/거부했는지 |
+**API 1: Action 생성**
+```
+POST /internal/agent/events/{eventId}/actions
 
-**UUID 저장:**
-- `approval_manager._requests`: Dict[request_id → ApprovalRequest]
-- `approval_manager._event_requests`: Dict[event_id → List[request_id]]
-- 메모리에만 저장 (서버 재시작 시 손실)
-- `cleanup_old_requests()`로 5분 후 자동 정리
-
-#### API 명세
-
-| Method | Path | 설명 |
-|--------|------|------|
-| GET | `/api/sse/approval` | SSE 스트림 (승인 요청 수신용) |
-| POST | `/api/approval/{request_id}` | 승인/거부 처리 |
-| GET | `/api/approval/pending` | 대기 중인 요청 목록 |
-
-**POST /api/approval/{request_id} 요청 Body:**
-```json
+Request Body:
 {
-    "approved": true,       // true: 승인, false: 거부
-    "user_id": "user-uuid"  // 승인/거부한 사용자 ID (선택)
+    "action": "112_POLICE",
+    "description": "긴급 신고 요청: A동 1층 로비에서 남성 2인이 폭행 중..."
+}
+
+Response Body:
+{
+    "actionId": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
-**SSE 이벤트 타입:**
+**API 2: HITL 승인 확인 (사용자 응답까지 대기)**
+```
+POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
 
-| 이벤트 | 설명 | 데이터 |
-|--------|------|--------|
-| `connected` | 연결 성공 | `{"status": "connected"}` |
-| `heartbeat` | 연결 유지 (30초마다) | `{"timestamp": ...}` |
-| `approval_request` | 승인 요청 | 아래 참조 |
-| `approval_timeout` | 타임아웃 | `{"request_id": "..."}` |
+Request Body: (없음)
 
-**approval_request 이벤트 데이터:**
-```json
+Response Body:
 {
-    "request_id": "uuid",
-    "event_id": "이벤트 ID",
-    "camera_id": "카메라 ID",
-    "camera_name": "카메라 이름",
-    "camera_location": "카메라 위치",
-    "action_type": "emergency_call",
-    "agency_name": "경찰청 112",
-    "situation_report": "상황 보고 내용",
-    "status": "pending",
-    "created_at": "2026-02-11T12:00:00"
+    "userId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "userName": "홍길동",
+    "userMail": "hong@example.com",
+    "result": true
 }
 ```
 
-#### 프론트엔드 연동 예시
+**API 3: Action 갱신 (도구 실행 후)**
+```
+PATCH /internal/agent/events/{eventId}/actions/{actionId}
 
-```javascript
-// 1. SSE 연결
-const eventSource = new EventSource('http://[AI-Agent주소]/api/sse/approval');
-
-// 2. 승인 요청 수신 → 모달 표시
-eventSource.addEventListener('approval_request', (e) => {
-    const data = JSON.parse(e.data);
-    showApprovalModal(data);  // 모달 표시
-});
-
-// 3. 타임아웃 처리
-eventSource.addEventListener('approval_timeout', (e) => {
-    const data = JSON.parse(e.data);
-    closeApprovalModal(data.request_id);  // 모달 닫기
-});
-
-// 4. 승인 버튼 클릭
-async function approveEmergencyCall(requestId) {
-    await fetch(`http://[AI-Agent주소]/api/approval/${requestId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved: true, user_id: currentUserId })
-    });
-    closeApprovalModal(requestId);
+Request Body:
+{
+    "userId": "a1b2c3d4-...",           // optional (타임아웃 시 null)
+    "action": "112_POLICE",             // 또는 "REJECTED_112_POLICE"
+    "description": "[APPROVED] 경찰청 112 긴급 신고 접수 | 승인자: 홍길동 ..."
 }
 
-// 5. 거부 버튼 클릭
-async function rejectEmergencyCall(requestId) {
-    await fetch(`http://[AI-Agent주소]/api/approval/${requestId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved: false, user_id: currentUserId })
-    });
-    closeApprovalModal(requestId);
+Response Body:
+{
+    "actionId": "550e8400-e29b-41d4-a716-446655440000"
 }
+```
+
+#### 액션 코드
+
+| 상태 | 액션 코드 예시 |
+|------|---------------|
+| 승인 | `112_POLICE`, `119_FIRE`, `SECURITY_TEAM`, `MANAGEMENT` |
+| 거절 | `REJECTED_112_POLICE`, `REJECTED_119_FIRE` 등 |
+| 타임아웃 | `TIMEOUT_112_POLICE`, `TIMEOUT_119_FIRE` 등 |
+
+#### DB 매핑 (event_actions 테이블)
+
+| DB 컬럼 | 타입 | AI Agent 값 |
+|---------|------|-------------|
+| `id` | UUID | (자동생성) |
+| `event_id` | UUID | URL path에서 전달 |
+| `user_id` | UUID | Request body의 `userId` |
+| `action` | TEXT | Request body의 `action` |
+| `description` | TEXT | Request body의 `description` |
+| `created_at` | TIMESTAMP | (자동생성) |
+| `updated_at` | TIMESTAMP | (자동생성) |
+
+#### description 형식 예시
+
+```
+# 승인
+[APPROVED] 경찰청 112 긴급 신고 접수 | 승인자: 홍길동 (hong@example.com) (접수번호: EMG-..., 접수 시각: ...)
+
+# 거절
+[REJECTED] 긴급 신고 요청이 사용자에 의해 거부됨 | 거절자: 홍길동 (hong@example.com)
+
+# 타임아웃
+[TIMEOUT] 긴급 신고 요청에 대한 응답 타임아웃
 ```
 
 #### 관련 파일
 
 | 파일 | 역할 |
 |------|------|
-| `src/core/approval_manager.py` | 승인 요청/응답 관리 (싱글톤) |
-| `src/app.py` | SSE 엔드포인트 + REST API |
-| `src/graph/subgraphs/response_agent.py` | `check_approval_node`, `skip_emergency_call_node` |
+| `src/clients/backend_client.py` | `create_action()`, `confirm_action()`, `update_action()` |
+| `src/graph/subgraphs/response_agent.py` | `check_approval_node`, `extract_actions`, `skip_emergency_call_node` |
 
 ---
 
@@ -771,9 +780,7 @@ VectorStoreClient를 사용하여 Qdrant에서 유사 문서를 검색합니다.
 **핵심 포인트:**
 - `response_agent` → `store_embedding` **순차 실행** (병렬 아님)
 - `search_knowledge` 노드가 **무조건 실행**되어 검색 보장
-- 검색이 먼저 수행되고, 저장이 나중에 수행됨
-- 따라서 **현재 사건은 검색 결과에 포함되지 않음** (의도된 설계)
-- 현재 사건은 처리 완료 후 저장되어 **미래 유사 사건 발생 시** 검색에 활용됨
+- 기존 사건은 처리 완료 후 저장되어 **미래 유사 사건 발생 시** 검색에 활용됨
 
 ---
 
@@ -918,36 +925,6 @@ search_protocol_and_cases 호출
 └── 4단계: 매뉴얼 + 과거 사례 결합
     ├── 기본 매뉴얼 (하드코딩)
     └── 과거 사례 기반 보완 정보
-```
-
----
-
-### api/mock_server.py
-
-개발/테스트용 Mock 서버입니다.
-
-**MockVLMServer (포트 8001):**
-- POST /analyze
-- 25% ABNORMAL, 25% SUSPICIOUS, 50% NORMAL
-- 랜덤 event_type 반환
-
-**MockPrecisionServer (포트 8002):**
-- POST /precision_analyze
-- risk_score: 0.8~1.0 (이상), 0.0~0.2 (정상)
-
-**MockBackendServer (포트 8088):**
-- POST /api/vlm-results → event_id 생성
-- PATCH /api/vlm-results/{event_id} → 이벤트 갱신 (report, actions 포함)
-- POST /api/vlm-results/{event_id}/report → 보고서 업로드 URL 반환
-- PUT /api/vlm-results/{event_id}/report/upload → 보고서 로컬 저장
-
-**Mock 보고서 저장 위치:**
-```
-mock_reports/
-└── {event_id}/
-    ├── report.pdf
-    ├── report.docx
-    └── report.pptx
 ```
 
 ---
@@ -1098,282 +1075,6 @@ python scripts/test_report_templates.py
 graph TD
     subgraph RealTime["[1단계] 실시간 영상 처리 및 VLM 판독"]
         ExtMgr["스프링부트 백엔드"]
-        RedisCh[("Redis Pub/Sub<br>(camera:analysis:update)")]
-        RM["RedisManager"]
-
-        RM -. "1. 구독" .-> RedisCh
-        ExtMgr -- "2. 'update' 발행" --> RedisCh
-        RedisCh -- "3. 알림" --> RM
-        
-        RM -- "4. 스트림 업데이트" --> P["5. Producer"]
-        P -- "Path A: 분석용 디코딩" --> W["6. Window Manager"]
-        P -- "Path B: 저장용 버퍼링" --> PB[("Packet Buffer")]
-        
-        W --> Q["7. 작업 큐"]
-        Q --> C["8. Consumer"]
-        C --> VLM["9. VLM 1차 분석"]
-        VLM --> Router{"10. 이상 감지 여부"}
-        Router -- "이상/의심" --> BR["11. 1차 백엔드 보고<br>(event_id 발급)"]
-        BR --> Clip["12. 영상 클립 생성 & 업로드<br>(PacketBuffer -> S3)"]
-        Clip -. "데이터 인출" .-> PB
-        Router -- "정상" --> EndLocal((End))
-    end
-
-    subgraph LangGraph["[2단계] LangGraph 분석/추론"]
-        Clip ~~~ Start
-        Start("13. Start<br>(with event_id)")
-        
-        Start --> N_Precise["14. 정밀 분석 LLM <br>(precision_analysis)"]
-        N_Precise --> N_Verify["15. 검증<br>(verification)<br>OpenAI Vision으로<br>정밀분석 결과 검증"]
-        N_Verify --> N_Update["16. 백엔드 갱신<br>(update_backend)"]
-        N_Update --> Router2{"17. 검증 결과<br>(verification_router)"}
-        
-        Router2 -- "SUSPICIOUS<br>(검증 실패)" --> EndGraph((End))
-        
-        Router2 -- "ABNORMAL<br>(검증 통과)" --> SubAgent
-        
-        subgraph SubAgent["18. response_agent (ReAct Agent 서브그래프)"]
-            direction TB
-            SA_Search["지식 검색<br>(search_knowledge)<br>매뉴얼 + 과거 사례"]
-            SA_Agent["LLM Agent"]
-            SA_Router{"도구 분기<br>(should_continue)"}
-            SA_Check["승인 확인<br>(check_approval)<br>Human-in-the-Loop"]
-            SA_Approval{"승인 결과<br>(approval_router)"}
-            SA_Tools["도구 실행<br>(execute_field_action,<br>emergency_call)"]
-            SA_Skip["스킵<br>(skip_emergency)"]
-            SA_Report["보고서 생성<br>(generate_report)"]
-            SA_UpdateBackend["백엔드 갱신<br>(update_backend)"]
-            
-            SA_Search --> SA_Agent
-            SA_Agent --> SA_Router
-            SA_Router -- "field_action만" --> SA_Tools
-            SA_Router -- "emergency_call 포함" --> SA_Check
-            SA_Check -- "SSE → 브라우저" --> SA_Approval
-            SA_Approval -- "승인" --> SA_Tools
-            SA_Approval -- "거부/타임아웃" --> SA_Skip
-            SA_Tools --> SA_Agent
-            SA_Skip --> SA_Agent
-            SA_Agent -- "완료" --> SA_Report
-            SA_Report --> SA_UpdateBackend
-        end
-        
-        SubAgent --> N_Embed["19. 임베딩 저장<br>(store_embedding)"]
-        N_Embed --> EndGraph
-    end
-
-    Clip ==> Start
-```
-
-### 15. 검증(verification) 노드 상세
-
-**역할**: 정밀 분석 결과가 실제 이미지와 일치하는지 OpenAI Vision API로 검증
-
----
-
-#### 검증에 사용되는 정보
-
-| 정보 | 출처 | 용도 |
-|------|------|------|
-| 8개 이미지 | frames | 실제 상황 확인 |
-| 카메라 이름/위치 | camera_name, camera_location | 장소 맥락 파악 |
-| 발생 시각 | occurred_at | 시간 맥락 파악 |
-| 1차 VLM 결과 | vlm_result | 정밀 분석과 비교 |
-| 2차 정밀 분석 결과 | precision_result | 검증 대상 |
-
----
-
-#### 판정 기준
-
-1. **이미지 확인**: 8개 이미지에서 이상 상황이 실제로 보이는지 확인
-2. **장소 맥락**: 카메라 위치를 고려하여 해당 장소에서 발생 가능한 상황인지 판단
-3. **VLM vs 정밀분석 비교**: 1차 VLM과 2차 정밀분석 결과가 다르면 이미지를 보고 판단
-4. **요약 검증**: summary 내용이 이미지에서 실제로 확인되는지 검증
-
----
-
-#### 검증 결과에 따른 동작
-
-**① 정확한 분석 (검증 통과)**
-```
-이미지: 폭행 장면 있음
-정밀 분석: ASSAULT (ABNORMAL)
-    ↓
-검증 결과: ✅ ABNORMAL 유지
-    ↓
-이후 흐름: response_agent → store_embedding → END
-```
-
-**② 이벤트 유형만 틀림 (유형 수정)**
-```
-이미지: 절도 장면 있음 (폭행 아님)
-정밀 분석: ASSAULT (ABNORMAL)
-    ↓
-검증 결과: ✅ ABNORMAL 유지 + event_type → BURGLARY로 수정
-    ↓
-이후 흐름: response_agent → store_embedding → END
-```
-
-**③ 오탐지 (이상 없음)**
-```
-이미지: 이상 상황 없음
-정밀 분석: ASSAULT (ABNORMAL)
-    ↓
-검증 결과: ❌ SUSPICIOUS로 변경
-    ↓
-이후 흐름: 바로 END (대응 조치 없음)
-```
-
----
-
-#### 검증 결과 JSON 형식
-
-```json
-{
-  "risk_level": "ABNORMAL",
-  "event_type": "ASSAULT",
-  "reason": "이미지에서 폭행 상황이 명확히 확인됨"
-}
-```
-
----
-
-**검증 실패 시 (SUSPICIOUS):**
-- 대응 조치(response_agent) 실행 안 함
-- 임베딩 저장(store_embedding) 실행 안 함
-- 16번에서 백엔드에 SUSPICIOUS로 갱신 후 종료
-
----
-
-### 검증 시나리오 예시
-
-> **참고**: 검증 노드는 이미지에서 **명백한 이상 상황이 보이는지** 확인하는 역할입니다.
-> "폭행 vs 절도" 같은 세부 구분은 어렵고, **"이상 있음/없음"** 수준의 판단이 현실적입니다.
-
-#### 시나리오 1: 이상 상황 확인됨 (ABNORMAL 유지)
-
-**입력 데이터:**
-```
-카메라 위치: 1층 로비
-정밀 분석: ASSAULT (ABNORMAL)
-요약: "두 남성이 격렬하게 몸싸움 중"
-```
-
-**OpenAI 응답:**
-```json
-{
-  "risk_level": "ABNORMAL",
-  "event_type": "ASSAULT",
-  "reason": "이미지에서 두 사람이 격렬하게 충돌하는 장면이 확인됨"
-}
-```
-
-**결과:** ✅ ABNORMAL 유지 → response_agent 실행
-
----
-
-#### 시나리오 2: 이상 상황 없음 (오탐지 → SUSPICIOUS)
-
-**입력 데이터:**
-```
-카메라 위치: 2층 복도
-정밀 분석: SWOON (ABNORMAL)
-요약: "사람이 바닥에 쓰러져 있음"
-```
-
-**OpenAI 응답:**
-```json
-{
-  "risk_level": "SUSPICIOUS",
-  "event_type": "SWOON",
-  "reason": "이미지에서 쓰러진 사람이 확인되지 않음. 정상적인 보행 중인 것으로 보임"
-}
-```
-
-**결과:** ❌ SUSPICIOUS로 변경 → 바로 END (대응 조치 없음)
-
----
-
-#### 시나리오 3: 이상은 있지만 유형이 다름 (event_type 수정)
-
-**입력 데이터:**
-```
-카메라 위치: 주차장
-정밀 분석: ASSAULT (ABNORMAL)
-요약: "두 사람이 격렬하게 움직이고 있음"
-```
-
-**OpenAI 응답:**
-```json
-{
-  "risk_level": "ABNORMAL",
-  "event_type": "VANDALISM",
-  "reason": "폭행이 아닌 차량 기물파손 행위로 보임. 한 명이 차량을 발로 차는 장면 확인"
-}
-```
-
-**결과:** ✅ ABNORMAL 유지 + event_type → VANDALISM → response_agent 실행
-
----
-
-### 검증의 한계
-
-| 구분 가능 | 구분 어려움 |
-|----------|-----------|
-| 사람 있음/없음 | 폭행 vs 절도 |
-| 쓰러짐/서있음 | 싸움 vs 장난 |
-| 격렬한 움직임/정상 | 실신 vs 휴식 |
-| 물건 던짐/정상 | 투기 vs 분리수거 |
-
-> 검증은 **"정밀 분석이 완전히 틀렸는지"** 확인하는 안전장치 역할입니다.
-> 세부적인 이벤트 유형 수정보다는 **오탐지 걸러내기**가 주 목적입니다.
-
----
-
-### 검증 정확도 향상 방향성
-
-현재 정적 이미지 8장으로는 **동작의 의도**를 정확히 파악하기 어렵습니다.
-검증 정확도를 높이기 위한 방향성입니다.
-
-| 방법 | 설명 | 상태 |
-|------|------|------|
-| **프레임별 타임스탬프** | 각 프레임의 시간 간격을 프롬프트에 포함 (예: Frame1=0초, Frame2=1초...) | ✅ 구현됨 |
-| **영상 클립 분석** | 8장 이미지 대신 30초 영상 클립을 GPT-4o로 분석 | 미구현 |
-| **프레임 수 증가** | 8장 → 16~32장으로 늘려 움직임 흐름 파악 | 미구현 |
-| **다중 모델 검증** | 여러 VLM 모델로 검증 후 다수결 | 미구현 |
-| **특화 모델 추가** | 폭행/절도 등 행동 인식 특화 모델 사용 | 미구현 |
-
-> 현재는 **오탐지 필터링** 수준의 검증만 수행합니다.
-> 세부적인 이벤트 유형 구분이 필요하면 위 방향성을 검토하세요.
-
-
-### 전체 흐름
-
-1. RedisManager: camera:analysis:update 채널 구독
-2. Redis에서 분석 대상 카메라 목록 조회
-3. 카메라별 FrameProducer 스레드 시작
-4. Producer: RTSP 패킷 수신
-   - Path A: 디코딩 → WindowManager
-   - Path B: PacketBuffer에 버퍼링
-5. WindowManager: 윈도우 생성 → QueueManager
-6. Consumer 워커:
-   - VLM 1차 분석
-   - NORMAL이면 종료
-   - 이상 감지 시: 백엔드 보고 → 클립 생성/업로드 → LangGraph
-7. LangGraph: precision_analysis → verification → update_backend → verification_router → (이상: response_agent → store_embedding / 의심: End)
-
-### 상세 데이터 흐름
-
-```mermaid
-graph TD
-    classDef proc fill:#2d2d2d,stroke:#9e9e9e,stroke-width:2px,color:#ffffff
-    classDef data fill:#1a237e,stroke:#5c6bc0,stroke-width:2px,stroke-dasharray: 5 5,color:#ffffff
-    classDef ext fill:#3e2723,stroke:#ffab91,stroke-width:2px,color:#ffffff
-    classDef router fill:#004d40,stroke:#4db6ac,stroke-width:2px,color:#ffffff
-
-    subgraph RealTime["[1단계] 동적 설정 및 실시간 영상 처리"]
-        direction TB
-        
-        ExtMgr["1. 스프링부트 백엔드"]:::ext
         RedisCam[("Redis Storage<br>analysis:cameras")]:::ext
         RedisCh[("2. Redis Pub/Sub")]:::ext
         RM["3. RedisManager"]:::proc
@@ -1514,14 +1215,14 @@ graph TD
 | `services/report_generator.py` | `ReportGeneratorService` | ✅ 완료 | HTML, PDF, DOCX, PPTX 보고서 생성 |
 | `graph/subgraphs/response_agent.py` | `generate_report_node()` | ✅ 완료 | 보고서 생성 + Mock 서버 업로드 |
 | `tools/response_tools.py` | `execute_field_action()` | ⚠️ Mock | CCTV 방송/조명/PTZ/사이렌 제어 (Mock 응답) |
-| `tools/response_tools.py` | `emergency_call()` | ⚠️ Mock | 112/119/보안팀 신고 (Mock 응답) |
+| `tools/response_tools.py` | `emergency_call()` | ⚠️ Mock | 112/119 신고 시스템 연동 (Mock 응답) |
 | `tools/response_tools.py` | `execute_field_action()`, `emergency_call()` | ⚠️ Mock | 현장 조치 및 긴급 신고 도구 |
 | `graph/subgraphs/response_agent.py` | `search_knowledge_node()` | ✅ 완료 | 매뉴얼/과거 사례 검색 노드 |
 | `clients/vector_store_client.py` | `VectorStoreClient` | ✅ 완료 | Qdrant 연동 (store_embedding에서 사용) |
 | `clients/verification_client.py` | `VerificationClient` | ✅ 완료 | OpenAI Vision API 기반 검증 |
 | `graph/nodes/verification.py` | `verification_node()` | ✅ 완료 | VerificationClient를 사용한 검증 노드 |
 
-### Mock 상태인 기능 (운영 환경 연동 필요)
+### Mock 상태인 기능 (운영 환경 연동 필요 작업)
 
 | 기능 | 현재 상태 | 운영 환경 필요 작업 |
 |------|----------|-------------------|
@@ -1587,4 +1288,6 @@ graph TD
 **변경된 파일:**
 - `src/graph/subgraphs/response_agent.py`: `search_knowledge_node()` 추가, 워크플로우 수정
 - `src/tools/response_tools.py`: `search_protocol_and_cases` 도구 제거
+
+
 
