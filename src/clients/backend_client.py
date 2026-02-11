@@ -29,9 +29,30 @@ class BackendClient:
         self.clip_endpoint_template = config.backend_clip_endpoint # 추가됨
         self.report_endpoint_template = config.backend_report_endpoint # 추가됨
 
+        # base_url 추출 (create_endpoint에서 /internal 이전까지)
+        # 예: "http://localhost:8080/internal/agent/events" → "http://localhost:8080"
+        self.base_url = self._extract_base_url(self.create_endpoint)
+
         self.timeout = config.backend_timeout
         self.max_retries = config.backend_max_retries
         self.retry_delay = config.backend_retry_delay
+
+    def _extract_base_url(self, endpoint: str) -> str:
+        """
+        엔드포인트에서 base_url을 추출합니다.
+
+        예: "http://localhost:8080/internal/agent/events" → "http://localhost:8080"
+
+        Args:
+            endpoint: 전체 엔드포인트 URL
+
+        Returns:
+            base_url (스키마 + 호스트 + 포트)
+        """
+        from urllib.parse import urlparse
+
+        parsed = urlparse(endpoint)
+        return f"{parsed.scheme}://{parsed.netloc}"
 
     def send_vlm_result(
         self,
@@ -340,3 +361,236 @@ class BackendClient:
                 result[report_format] = None
 
         return result
+
+    # =========================================
+    # Human-in-the-Loop 승인 관련 API
+    # =========================================
+    #
+    # [HITL 흐름]
+    # 1. create_action(): Action 생성 → actionId 획득
+    #    POST /internal/agent/events/{eventId}/actions
+    #    Request:  { action, description }
+    #    Response: { actionId }
+    #
+    # 2. confirm_action(): 승인 결과 대기 및 조회
+    #    POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
+    #    Request:  (없음)
+    #    Response: { userId, userName, userMail, result }
+    #
+    # [액션 코드]
+    # - 112_POLICE: 경찰 신고
+    # - 119_FIRE: 소방/응급 신고
+    # - SECURITY_TEAM: 내부 보안팀 호출
+    # - MANAGEMENT: 관리사무소 연락
+    # =========================================
+    def create_action(
+        self,
+        event_id: str,
+        action: str,
+        description: str,
+    ) -> Optional[str]:
+        """
+        Action을 생성하고 actionId를 받습니다.
+
+        [API 엔드포인트]
+        POST /internal/agent/events/{eventId}/actions
+
+        [Request Body]
+        {
+            "action": "112_POLICE",      # 액션 코드
+            "description": "긴급 신고 요청..."  # 설명
+        }
+
+        [Response Body]
+        {
+            "actionId": "uuid"           # 생성된 action ID
+        }
+
+        Args:
+            event_id: 이벤트 ID
+            action: 액션 코드 (예: "112_POLICE", "119_FIRE")
+            description: 액션 설명
+
+        Returns:
+            생성된 actionId 또는 None (실패 시)
+        """
+        endpoint = f"{self.base_url}/internal/agent/events/{event_id}/actions"
+
+        payload = {
+            "action": action,
+            "description": description,
+        }
+
+        try:
+            self.logger.info(f"[HITL] Action 생성 요청: {event_id} - {action}")
+
+            response = requests.post(
+                endpoint,
+                json=payload,
+                timeout=self.timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            action_id = data.get("actionId")
+
+            self.logger.info(f"[HITL] Action 생성 완료: {event_id} - actionId={action_id}")
+            return action_id
+
+        except Timeout:
+            self.logger.warning(f"⏱️ [HITL] Action 생성 타임아웃: {event_id}")
+            return None
+
+        except RequestException as e:
+            self.logger.error(f"❌ [HITL] Action 생성 실패: {event_id} - {e}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"💥 [HITL] Action 생성 예외: {event_id} - {e}", exc_info=True)
+            return None
+
+    def confirm_action(
+        self,
+        event_id: str,
+        action_id: str,
+        timeout: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Action에 대한 Human-in-the-Loop 승인 결과를 조회합니다.
+
+        백엔드에서 사용자 승인/거절이 완료될 때까지 대기하고,
+        결과를 반환합니다.
+
+        [API 엔드포인트]
+        POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
+
+        [Request Body]
+        (없음)
+
+        [Response Body]
+        {
+            "userId": "uuid",        # 승인/거절한 사용자 ID
+            "userName": "홍길동",     # 사용자 이름
+            "userMail": "a@b.com",   # 사용자 이메일
+            "result": true/false     # 승인 여부
+        }
+
+        Args:
+            event_id: 이벤트 ID
+            action_id: 승인 요청할 action ID
+            timeout: 요청 타임아웃 (초, None이면 기본값 사용)
+
+        Returns:
+            백엔드 응답 딕셔너리 또는 None (실패 시)
+        """
+        endpoint = f"{self.base_url}/internal/agent/events/{event_id}/actions/{action_id}/confirm"
+
+        # HITL 승인은 사용자 응답을 기다려야 하므로 타임아웃을 길게 설정
+        # 기본값: 없음 (무한 대기) 또는 설정된 값 사용
+        request_timeout = timeout if timeout else None  # None = 무한 대기
+
+        try:
+            self.logger.info(f"[HITL] 승인 확인 요청: {event_id} - actionId={action_id}")
+
+            response = requests.post(
+                endpoint,
+                timeout=request_timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            self.logger.info(f"[HITL] 승인 확인 응답: {event_id} - result={data.get('result')}")
+
+            return data
+
+        except Timeout:
+            self.logger.warning(f"⏱️ [HITL] 승인 확인 타임아웃: {event_id}")
+            return None
+
+        except RequestException as e:
+            self.logger.error(f"❌ [HITL] 승인 확인 실패: {event_id} - {e}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"💥 [HITL] 승인 확인 예외: {event_id} - {e}", exc_info=True)
+            return None
+
+    def update_action(
+        self,
+        event_id: str,
+        action_id: str,
+        action: str,
+        description: str,
+        user_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Action 정보를 백엔드에 갱신합니다.
+
+        도구 실행이 완료된 후, 최종 결과를 백엔드에 업데이트합니다.
+        emergency_call 도구 실행 후 호출됩니다.
+
+        [API 엔드포인트]
+        PATCH /internal/agent/events/{eventId}/actions/{actionId}
+
+        [Request Body]
+        {
+            "userId": "uuid",        # (optional) 승인/거절한 사용자 ID
+            "action": "112_POLICE",  # 액션 코드
+            "description": "..."     # 최종 설명 (도구 실행 결과 포함)
+        }
+
+        [Response Body]
+        {
+            "actionId": "uuid"       # 갱신된 action ID
+        }
+
+        Args:
+            event_id: 이벤트 ID
+            action_id: 갱신할 action ID
+            action: 액션 코드 (예: "112_POLICE", "REJECTED_112_POLICE")
+            description: 최종 설명 (도구 실행 결과 포함)
+            user_id: 승인/거절한 사용자 ID (optional)
+
+        Returns:
+            갱신된 actionId 또는 None (실패 시)
+        """
+        endpoint = f"{self.base_url}/internal/agent/events/{event_id}/actions/{action_id}"
+
+        # Request Body 구성 (userId는 optional)
+        payload = {
+            "action": action,
+            "description": description,
+        }
+        if user_id:
+            payload["userId"] = user_id
+
+        try:
+            self.logger.info(f"[HITL] Action 갱신 요청: {event_id} - actionId={action_id}")
+
+            response = requests.patch(
+                endpoint,
+                json=payload,
+                timeout=self.timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            updated_action_id = data.get("actionId")
+
+            self.logger.info(f"[HITL] Action 갱신 완료: {event_id} - actionId={updated_action_id}")
+            return updated_action_id
+
+        except Timeout:
+            self.logger.warning(f"⏱️ [HITL] Action 갱신 타임아웃: {event_id}")
+            return None
+
+        except RequestException as e:
+            self.logger.error(f"❌ [HITL] Action 갱신 실패: {event_id} - {e}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"💥 [HITL] Action 갱신 예외: {event_id} - {e}", exc_info=True)
+            return None

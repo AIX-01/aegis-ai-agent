@@ -226,13 +226,16 @@ class MockBackendServer:
                 if payload.report.get("generated_at"):
                     self.logger.info(f"      generated_at: {payload.report['generated_at']}")
 
-            # 대응 조치 출력
+            # 대응 조치 출력 (event_actions 테이블 스키마와 일치)
             if payload.actions:
                 self.logger.info(f"  - actions ({len(payload.actions)}건):")
                 for i, action in enumerate(payload.actions, 1):
-                    action_type = action.get("type", "unknown")
+                    # action: 조치 유형/코드, description: 설명, user_id: HITL 승인자 ID
+                    action_code = action.get("action", "unknown")
                     desc = action.get("description", "")[:80]
-                    self.logger.info(f"      [{i}] {action_type}: {desc}")
+                    user_id = action.get("user_id")
+                    user_info = f" (승인자: {user_id})" if user_id else " (자동)"
+                    self.logger.info(f"      [{i}] {action_code}: {desc}{user_info}")
 
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
