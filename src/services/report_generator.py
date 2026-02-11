@@ -366,19 +366,54 @@ class ReportGeneratorService:
         try:
             prs = Presentation(template_path)
 
+            def replace_placeholders_in_pptx_paragraph(para, data):
+                """
+                PPTX 단락에서 플레이스홀더를 치환합니다.
+                run이 나뉘어진 경우도 처리합니다.
+
+                Args:
+                    para: PPTX의 paragraph 객체
+                    data: 치환할 데이터 딕셔너리
+                """
+                # 전체 텍스트 추출 (모든 run을 합침)
+                full_text = "".join([run.text for run in para.runs])
+
+                if not full_text.strip():
+                    return
+
+                # 텍스트 플레이스홀더 치환
+                new_text = full_text
+                for key, value in data.items():
+                    if key == "frames":
+                        continue
+                    placeholder = f"{{{{{key}}}}}"
+                    if placeholder in new_text:
+                        # actions 키의 경우 actions_text 사용
+                        if key == "actions" and "actions_text" in data:
+                            value = data["actions_text"]
+                        new_text = new_text.replace(placeholder, str(value))
+
+                # 텍스트가 변경된 경우에만 업데이트
+                if new_text != full_text:
+                    # 첫 번째 run에 전체 텍스트 넣고 나머지는 비움
+                    if para.runs:
+                        para.runs[0].text = new_text
+                        for run in para.runs[1:]:
+                            run.text = ""
+
             for slide in prs.slides:
                 # 텍스트 프레임에서 플레이스홀더 치환
                 for shape in slide.shapes:
                     if hasattr(shape, "text_frame"):
                         for para in shape.text_frame.paragraphs:
-                            self._replace_placeholders_in_pptx_paragraph(para, data)
+                            replace_placeholders_in_pptx_paragraph(para, data)
 
                     # 테이블 처리
                     if shape.has_table:
                         for row in shape.table.rows:
                             for cell in row.cells:
                                 for para in cell.text_frame.paragraphs:
-                                    self._replace_placeholders_in_pptx_paragraph(para, data)
+                                    replace_placeholders_in_pptx_paragraph(para, data)
 
                 # {{frames}} 플레이스홀더에 이미지 삽입
                 for shape in slide.shapes:
