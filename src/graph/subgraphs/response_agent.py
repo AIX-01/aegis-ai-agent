@@ -67,8 +67,8 @@ class ResponseAgentState(TypedDict):
 
     # 에이전트 실행 중 생성
     messages: Annotated[Sequence[BaseMessage], lambda x, y: x + y]
-    # actions: 대응 조치 리스트 (백엔드 EventAction 테이블과 일치)
-    # 형식: [{"type": str, "action": str, "log": str, "triggered_at": str}, ...]
+    # actions: 대응 조치 리스트 (백엔드 event_actions 테이블과 일치)
+    # 형식: [{"action": str, "description": str, "user_id": str | None}, ...]
     actions: List[Dict[str, Any]]
     rag_references: List[Dict[str, Any]]  # 검색된 참조 문서들
     knowledge_context: str  # [추가] LLM에 주입할 검색 결과 텍스트 (매뉴얼 + 과거 사례)
@@ -78,8 +78,29 @@ class ResponseAgentState(TypedDict):
     errors: List[str]  # 에러 목록
 
     # Human-in-the-Loop 승인 관련
-    pending_approval: Dict[str, Any]  # 승인 대기 중인 emergency_call 정보
-    approval_result: Dict[str, Any]   # 승인 결과 {"approved": bool, "status": str}
+    # =========================================
+    # 백엔드 API 경유 방식:
+    # POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
+    #
+    # Response Body:
+    # {
+    #     "userId": "uuid",        # 승인/거절한 사용자 ID
+    #     "userName": "홍길동",     # 사용자 이름
+    #     "userMail": "a@b.com",   # 사용자 이메일
+    #     "result": true/false     # 승인 여부
+    # }
+    # =========================================
+    pending_approval: Dict[str, Any]  # 승인 대기 중인 emergency_call 정보 (action, action_id 등)
+    approval_result: Dict[str, Any]   # 백엔드 응답 결과
+    # approval_result 형식:
+    # {
+    #     "approved": bool,        # result 값 (승인 여부)
+    #     "status": str,           # "approved" | "rejected" | "timeout" | "pending"
+    #     "user_id": str | None,   # userId (승인/거절자 ID)
+    #     "user_name": str | None, # userName (승인/거절자 이름)
+    #     "user_mail": str | None, # userMail (승인/거절자 이메일)
+    #     "action_id": str | None, # 백엔드에서 생성된 action ID
+    # }
 
 
 # =========================================
@@ -188,20 +209,23 @@ def search_knowledge_node(state: ResponseAgentState, config: Config) -> Dict[str
                     knowledge_text += f"- 상황: {payload.get('summary', '')}\n"
 
                     # =========================================
-                    # [추가] 과거 대응 조치 표시
+                    # [추가] 과거 대응 조치 표시 (event_actions 테이블 스키마와 일치)
                     # =========================================
                     # actions 필드가 있으면 LLM이 참조할 수 있도록 표시
-                    # 형식: [{"type": "field_action", "description": "..."}, ...]
+                    # 형식: [{"action": "BROADCAST", "description": "...", "user_id": ...}, ...]
                     past_actions = payload.get('actions', [])
                     if past_actions:
                         knowledge_text += "- 대응조치:\n"
                         for action in past_actions:
-                            action_type = action.get('type', 'unknown')
+                            action_code = action.get('action', 'unknown')
                             action_desc = action.get('description', '')
+                            user_id = action.get('user_id')
                             # description이 너무 길면 첫 100자만 표시
                             if len(action_desc) > 100:
                                 action_desc = action_desc[:100] + "..."
-                            knowledge_text += f"  - [{action_type}] {action_desc}\n"
+                            # HITL 승인 여부 표시
+                            user_info = " (사용자 승인)" if user_id else ""
+                            knowledge_text += f"  - [{action_code}] {action_desc}{user_info}\n"
                     knowledge_text += "\n"
 
                 rag_references.append({
@@ -378,13 +402,24 @@ def increment_iteration(state: ResponseAgentState) -> Dict[str, Any]:
 # =========================================
 def check_approval_node(state: ResponseAgentState, config: Config) -> Dict[str, Any]:
     """
-    emergency_call 도구 호출에 대해 사용자 승인을 요청하고 대기하는 노드
+    emergency_call 도구 호출에 대해 백엔드 API를 통해 사용자 승인을 요청하고 대기하는 노드
 
     [역할]
     1. 마지막 메시지에서 emergency_call 도구 호출 정보 추출
-    2. ApprovalManager를 통해 승인 요청 생성 (SSE로 프론트엔드에 전송)
-    3. 사용자 응답 대기 (모달에서 승인/거부 버튼 클릭)
+    2. Action 생성 API 호출 → actionId 획득
+       POST /internal/agent/events/{eventId}/actions
+    3. 승인 확인 API 호출 → 사용자 응답 대기
+       POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
     4. 승인 결과를 state에 저장
+
+    [API 흐름]
+    1) POST /internal/agent/events/{eventId}/actions
+       Request:  { action, description }
+       Response: { actionId }
+
+    2) POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
+       Request:  (없음)
+       Response: { userId, userName, userMail, result }
 
     Args:
         state: 현재 에이전트 상태
@@ -393,7 +428,7 @@ def check_approval_node(state: ResponseAgentState, config: Config) -> Dict[str, 
     Returns:
         업데이트된 상태 (pending_approval, approval_result)
     """
-    from ...core.approval_manager import approval_manager
+    from ...clients.backend_client import BackendClient
 
     messages = state.get("messages", [])
     if not messages:
@@ -417,27 +452,96 @@ def check_approval_node(state: ResponseAgentState, config: Config) -> Dict[str, 
         logger.warning("[check_approval] emergency_call 도구 호출 정보 없음")
         return {"approval_result": {"approved": True, "status": "no_emergency_call"}}
 
-    # 승인 요청 생성 (SSE로 프론트엔드 모달에 전송)
+    # 상태에서 필요한 정보 추출
     camera_id = state.get("camera_id", "")
     event_id = state.get("event_id", "")
-    camera_name = state.get("camera_name", "")
-    camera_location = state.get("camera_location", "")
 
-    logger.info(f"[{camera_id}] emergency_call 승인 요청: {emergency_call_info['agency_type']}")
+    logger.info(f"[{camera_id}] emergency_call 승인 요청 시작: {emergency_call_info['agency_type']}")
 
-    request_id = approval_manager.request_approval(
-        event_id=event_id,
-        camera_id=camera_id,
-        action_type="emergency_call",
-        action_detail=emergency_call_info,
-        camera_name=camera_name,
-        camera_location=camera_location,
-    )
+    try:
+        # 백엔드 클라이언트 생성
+        backend_client = BackendClient(config)
 
-    # 사용자 승인 대기 (타임아웃 60초)
-    result = approval_manager.wait_for_approval(request_id, timeout=60.0)
+        # =========================================
+        # Step 1: Action 생성 → actionId 획득
+        # POST /internal/agent/events/{eventId}/actions
+        # =========================================
+        action_id = backend_client.create_action(
+            event_id=event_id,
+            action=emergency_call_info["agency_type"],
+            description=f"긴급 신고 요청: {emergency_call_info['situation_report'][:100]}",
+        )
 
-    logger.info(f"[{camera_id}] 승인 결과: {result['status']}")
+        if not action_id:
+            logger.error(f"[{camera_id}] Action 생성 실패")
+            return {
+                "pending_approval": emergency_call_info,
+                "approval_result": {
+                    "approved": False,
+                    "status": "error",
+                    "user_id": None,
+                    "user_name": None,
+                    "user_mail": None,
+                    "action_id": None,
+                    "error": "Action 생성 실패",
+                },
+            }
+
+        logger.info(f"[{camera_id}] Action 생성 완료: actionId={action_id}")
+
+        # =========================================
+        # Step 2: 승인 확인 → 사용자 응답 대기
+        # POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
+        # =========================================
+        response = backend_client.confirm_action(
+            event_id=event_id,
+            action_id=action_id,
+            timeout=None,  # 사용자 응답까지 무한 대기 (타임아웃 틀은 유지)
+        )
+
+        if response:
+            # 백엔드 응답 파싱
+            # {userId, userName, userMail, result}
+            approved = response.get("result", False)
+            user_id = response.get("userId")
+            user_name = response.get("userName")
+            user_mail = response.get("userMail")
+
+            status = "approved" if approved else "rejected"
+
+            result = {
+                "approved": approved,
+                "status": status,
+                "user_id": user_id,
+                "user_name": user_name,
+                "user_mail": user_mail,
+                "action_id": action_id,
+            }
+
+            logger.info(f"[{camera_id}] 승인 결과: {status} (user: {user_name})")
+        else:
+            # 백엔드 응답 실패 시 (타임아웃 처리 틀)
+            result = {
+                "approved": False,
+                "status": "timeout",
+                "user_id": None,
+                "user_name": None,
+                "user_mail": None,
+                "action_id": action_id,
+            }
+            logger.warning(f"[{camera_id}] 승인 확인 응답 없음 (timeout)")
+
+    except Exception as e:
+        logger.error(f"[{camera_id}] 승인 요청 중 오류: {e}", exc_info=True)
+        result = {
+            "approved": False,
+            "status": "error",
+            "user_id": None,
+            "user_name": None,
+            "user_mail": None,
+            "action_id": None,
+            "error": str(e),
+        }
 
     return {
         "pending_approval": emergency_call_info,
@@ -508,22 +612,27 @@ def skip_emergency_call_node(state: ResponseAgentState) -> Dict[str, Any]:
     return {"messages": new_messages}
 
 
-def extract_actions(state: ResponseAgentState) -> Dict[str, Any]:
+def extract_actions(state: ResponseAgentState, config: Config) -> Dict[str, Any]:
     """
     메시지에서 결정된 조치들과 참조 문서를 추출합니다.
+    emergency_call 도구 실행 후 백엔드에 update_action API를 호출합니다.
 
-    [추출 정보 - 백엔드 EventAction 테이블과 일치]
-    - type: "field_action" | "emergency_call" (조치 유형)
-    - action: "BROADCAST" | "112_POLICE" | ... (실행된 액션 코드)
-    - log: 상세 설명 텍스트
-    - triggered_at: 발동 시각 (ISO 8601 형식)
+    [추출 정보 - 백엔드 event_actions 테이블과 일치]
+    - action: TEXT - 조치 유형/코드 ("BROADCAST", "112_POLICE" 등)
+    - description: TEXT - 조치에 대한 상세 설명
+    - user_id: UUID | None - HITL 승인자 ID (시스템 자동 시 None)
 
     [액션 코드 매핑]
     - field_action: BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN
-    - emergency_call: 112_POLICE, 119_FIRE, SECURITY_TEAM, MANAGEMENT
+    - emergency_call (승인): 112_POLICE, 119_FIRE, SECURITY_TEAM, MANAGEMENT
+    - emergency_call (거절): REJECTED_112_POLICE, REJECTED_119_FIRE, ...
+
+    [백엔드 갱신]
+    - emergency_call 도구 실행 후 PATCH /internal/agent/events/{eventId}/actions/{actionId} 호출
     """
     import re
     from datetime import datetime
+    from ...clients.backend_client import BackendClient
 
     actions = []
     rag_references = []
@@ -537,6 +646,25 @@ def extract_actions(state: ResponseAgentState) -> Dict[str, Any]:
         "관리사무소": "MANAGEMENT",
     }
 
+    # Human-in-the-Loop 승인 정보 확인
+    # 백엔드 API 응답 구조:
+    # {
+    #     "approved": bool,
+    #     "status": "approved" | "rejected" | "timeout",
+    #     "user_id": str | None,    # userId
+    #     "user_name": str | None,  # userName
+    #     "user_mail": str | None,  # userMail
+    #     "action_id": str | None   # 백엔드에서 생성된 action ID
+    # }
+    approval_result = state.get("approval_result", {})
+    approval_user_id = approval_result.get("user_id")      # HITL 승인/거절자 ID
+    approval_user_name = approval_result.get("user_name")  # HITL 승인/거절자 이름
+    approval_user_mail = approval_result.get("user_mail")  # HITL 승인/거절자 이메일
+    approval_action_id = approval_result.get("action_id")  # 백엔드에서 생성된 action ID
+
+    # 이벤트 ID (백엔드 갱신에 필요)
+    event_id = state.get("event_id", "")
+
     for message in state.get("messages", []):
         if isinstance(message, ToolMessage):
             content = message.content
@@ -549,6 +677,7 @@ def extract_actions(state: ResponseAgentState) -> Dict[str, Any]:
                 })
 
             # execute_field_action 결과 → actions
+            # field_action은 자동 실행이므로 user_id = None
             elif "현장 조치 실행 결과" in content:
                 # =========================================
                 # action 코드 추출 (BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN)
@@ -559,56 +688,166 @@ def extract_actions(state: ResponseAgentState) -> Dict[str, Any]:
                 if action_match:
                     action_code = action_match.group(1)
 
-                # triggered_at 추출 (실행 시각)
-                # 예시: "- 실행 시각: 2026-02-11 22:30:00"
-                triggered_at = None
+                # description 생성 - 실행 결과를 요약하여 설명 텍스트로 사용
+                # 예시: "- 대상 카메라: cam-001"
+                camera_match = re.search(r"- 대상 카메라:\s*(.+)", content)
+                camera_id = camera_match.group(1).strip() if camera_match else ""
+
+                # 방송 메시지 추출 (BROADCAST인 경우)
+                message_match = re.search(r'- 방송 내용:\s*"(.+)"', content)
+                broadcast_msg = message_match.group(1) if message_match else ""
+
+                # 실행 시각 추출
                 time_match = re.search(r"- 실행 시각:\s*(.+)", content)
-                if time_match:
-                    time_str = time_match.group(1).strip()
-                    try:
-                        # "2026-02-11 22:30:00" 형식을 ISO 8601로 변환
-                        dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
-                        triggered_at = dt.isoformat()
-                    except ValueError:
-                        triggered_at = time_str  # 파싱 실패 시 원본 문자열 사용
+                triggered_at = time_match.group(1).strip() if time_match else ""
+
+                # description 조립 - 사람이 읽기 쉬운 형태로
+                if action_code == "BROADCAST" and broadcast_msg:
+                    description = f"[{action_code}] 카메라 {camera_id}에서 방송 실행: \"{broadcast_msg}\" (실행 시각: {triggered_at})"
+                else:
+                    description = f"[{action_code}] 카메라 {camera_id}에서 현장 조치 실행 (실행 시각: {triggered_at})"
 
                 actions.append({
-                    "type": "field_action",
-                    "action": action_code,  # BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN
-                    "log": content,         # 전체 실행 결과 로그
-                    "triggered_at": triggered_at
+                    "action": action_code,      # BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN
+                    "description": description, # 조치에 대한 상세 설명
+                    "user_id": None             # field_action은 자동 실행 (HITL 미적용)
                 })
 
-            # emergency_call 결과 → actions
+            # emergency_call 결과 → actions + 백엔드 갱신
+            # emergency_call은 HITL 승인이 필요하므로 user_id 포함 가능
             elif "긴급 신고 접수 결과" in content:
                 # =========================================
                 # agency 추출 후 action 코드로 변환
                 # =========================================
                 # 예시: "- 신고 기관: 경찰청 112"
                 action_code = None
+                agency_name = ""
                 agency_match = re.search(r"- 신고 기관:\s*(.+)", content)
                 if agency_match:
-                    agency = agency_match.group(1).strip()
+                    agency_name = agency_match.group(1).strip()
                     # 한글 agency명을 action 코드로 변환
-                    action_code = AGENCY_TO_ACTION.get(agency, agency)
+                    action_code = AGENCY_TO_ACTION.get(agency_name, agency_name)
 
-                # triggered_at 추출 (접수 시각)
-                # 예시: "- 접수 시각: 2026-02-11 22:30:15"
-                triggered_at = None
+                # 접수 번호 추출
+                receipt_match = re.search(r"- 접수 번호:\s*(.+)", content)
+                receipt_no = receipt_match.group(1).strip() if receipt_match else ""
+
+                # 접수 시각 추출
                 time_match = re.search(r"- 접수 시각:\s*(.+)", content)
-                if time_match:
-                    time_str = time_match.group(1).strip()
+                triggered_at = time_match.group(1).strip() if time_match else ""
+
+                # 전달 내용 요약 추출
+                report_match = re.search(r"### 전달 내용\n(.+?)(?:\n###|\Z)", content, re.DOTALL)
+                situation_summary = report_match.group(1).strip()[:100] if report_match else ""
+
+                # 승인자 정보 조립
+                approver_info = ""
+                if approval_user_name:
+                    approver_info = f"승인자: {approval_user_name}"
+                    if approval_user_mail:
+                        approver_info += f" ({approval_user_mail})"
+
+                # description 조립 - 사람이 읽기 쉬운 형태로 + 승인자 정보 포함
+                description = f"[APPROVED] {agency_name} 긴급 신고 접수"
+                if approver_info:
+                    description += f" | {approver_info}"
+                description += f" (접수번호: {receipt_no}, 접수 시각: {triggered_at})"
+                if situation_summary:
+                    description += f" - 상황: {situation_summary}"
+
+                # =========================================
+                # 백엔드 갱신: PATCH /internal/agent/events/{eventId}/actions/{actionId}
+                # 도구 실행 완료 후 최종 결과를 백엔드에 업데이트
+                # =========================================
+                if approval_action_id and event_id:
                     try:
-                        dt = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
-                        triggered_at = dt.isoformat()
-                    except ValueError:
-                        triggered_at = time_str
+                        backend_client = BackendClient(config)
+                        backend_client.update_action(
+                            event_id=event_id,
+                            action_id=approval_action_id,
+                            action=action_code,
+                            description=description,
+                            user_id=approval_user_id,
+                        )
+                        logger.info(f"[{event_id}] emergency_call 결과 백엔드 갱신 완료 (actionId: {approval_action_id})")
+                    except Exception as e:
+                        logger.error(f"[{event_id}] emergency_call 결과 백엔드 갱신 실패: {e}")
 
                 actions.append({
-                    "type": "emergency_call",
-                    "action": action_code,  # 112_POLICE, 119_FIRE, SECURITY_TEAM, MANAGEMENT
-                    "log": content,         # 전체 실행 결과 로그
-                    "triggered_at": triggered_at
+                    "action": action_code,          # 112_POLICE, 119_FIRE, SECURITY_TEAM, MANAGEMENT
+                    "description": description,    # 조치에 대한 상세 설명
+                    "user_id": approval_user_id    # HITL 승인자 ID (승인된 경우)
+                })
+
+            # =========================================
+            # emergency_call 거절/타임아웃 결과 → actions + 백엔드 갱신
+            # =========================================
+            elif "긴급 신고가 사용자에 의해 거부되었습니다" in content:
+                # pending_approval에서 원래 요청 정보 가져오기
+                pending_approval = state.get("pending_approval", {})
+                pending_agency_type = pending_approval.get("agency_type", "")
+
+                action_code = f"REJECTED_{pending_agency_type}" if pending_agency_type else "REJECTED_EMERGENCY"
+
+                # 거절자 정보 조립
+                rejecter_info = ""
+                if approval_user_name:
+                    rejecter_info = f"거절자: {approval_user_name}"
+                    if approval_user_mail:
+                        rejecter_info += f" ({approval_user_mail})"
+
+                # description 조립 - 거절자 정보 포함
+                description = f"[REJECTED] 긴급 신고 요청이 사용자에 의해 거부됨"
+                if rejecter_info:
+                    description += f" | {rejecter_info}"
+
+                # 백엔드 갱신
+                if approval_action_id and event_id:
+                    try:
+                        backend_client = BackendClient(config)
+                        backend_client.update_action(
+                            event_id=event_id,
+                            action_id=approval_action_id,
+                            action=action_code,
+                            description=description,
+                            user_id=approval_user_id,
+                        )
+                        logger.info(f"[{event_id}] emergency_call 거절 결과 백엔드 갱신 완료")
+                    except Exception as e:
+                        logger.error(f"[{event_id}] emergency_call 거절 결과 백엔드 갱신 실패: {e}")
+
+                actions.append({
+                    "action": action_code,
+                    "description": description,
+                    "user_id": approval_user_id
+                })
+
+            elif "긴급 신고가 타임아웃되었습니다" in content:
+                pending_approval = state.get("pending_approval", {})
+                pending_agency_type = pending_approval.get("agency_type", "")
+
+                action_code = f"TIMEOUT_{pending_agency_type}" if pending_agency_type else "TIMEOUT_EMERGENCY"
+                description = f"[TIMEOUT] 긴급 신고 요청에 대한 응답 타임아웃"
+
+                # 백엔드 갱신
+                if approval_action_id and event_id:
+                    try:
+                        backend_client = BackendClient(config)
+                        backend_client.update_action(
+                            event_id=event_id,
+                            action_id=approval_action_id,
+                            action=action_code,
+                            description=description,
+                            user_id=None,  # 타임아웃은 응답자 없음
+                        )
+                        logger.info(f"[{event_id}] emergency_call 타임아웃 결과 백엔드 갱신 완료")
+                    except Exception as e:
+                        logger.error(f"[{event_id}] emergency_call 타임아웃 결과 백엔드 갱신 실패: {e}")
+
+                actions.append({
+                    "action": action_code,
+                    "description": description,
+                    "user_id": None
                 })
 
     return {"actions": actions, "rag_references": rag_references}
@@ -830,6 +1069,9 @@ def build_response_agent(config: Config) -> StateGraph:
     # Human-in-the-Loop 승인 확인 노드에 config 바인딩
     check_approval = functools.partial(check_approval_node, config=config)
 
+    # extract_actions 노드에 config 바인딩 (백엔드 갱신용)
+    extract_actions_with_config = functools.partial(extract_actions, config=config)
+
     # 그래프 빌더
     workflow = StateGraph(ResponseAgentState)
 
@@ -838,7 +1080,7 @@ def build_response_agent(config: Config) -> StateGraph:
     workflow.add_node("agent", agent_node)
     workflow.add_node("tools", tool_node)
     workflow.add_node("increment", increment_iteration)
-    workflow.add_node("extract_actions", extract_actions)
+    workflow.add_node("extract_actions", extract_actions_with_config)  # config 바인딩된 버전
     workflow.add_node("generate_report", generate_report)
     workflow.add_node("update_backend", update_backend)
 

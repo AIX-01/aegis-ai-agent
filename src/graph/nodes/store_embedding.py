@@ -45,8 +45,8 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
     # [추가] response_agent에서 생성된 대응 조치 가져오기
     # =========================================
     # actions는 response_agent의 extract_actions 노드에서 생성됨
-    # 형식: [{"type": str, "action": str, "log": str, "triggered_at": str}, ...]
-    # 백엔드 EventAction 테이블과 동일한 구조
+    # 형식: [{"action": str, "description": str, "user_id": str | None}, ...]
+    # 백엔드 event_actions 테이블과 동일한 구조
     actions = state.get("actions", [])
 
     logger.info(f"[{camera_uuid}] 이벤트 임베딩 저장 시작... (Event ID: {event_id})")
@@ -139,8 +139,8 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
             # [추가] 대응 조치 정보 (시나리오 1, 2 활용)
             # =========================================
             # response_agent에서 생성된 대응 조치 리스트
-            # 형식: [{"type": str, "action": str, "log": str, "triggered_at": str}, ...]
-            # 백엔드 EventAction 테이블과 동일한 구조
+            # 형식: [{"action": str, "description": str, "user_id": str | None}, ...]
+            # 백엔드 event_actions 테이블과 동일한 구조
             #
             # 활용:
             # - 시나리오 1: 유사 상황에서 어떤 대응을 했는지 참조

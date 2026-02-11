@@ -51,16 +51,24 @@ class AnalysisState(TypedDict):
     # =========================================
     # 메타 데이터
     # =========================================
-    # actions: 대응 조치 리스트 (백엔드 EventAction 테이블과 일치)
+    # actions: 대응 조치 리스트 (백엔드 event_actions 테이블과 일치)
+    # DB 스키마:
+    #   - id: UUID (PK, 자동생성) - AI Agent에서 설정하지 않음
+    #   - event_id: UUID (FK → events.id) - 백엔드에서 자동 매핑
+    #   - user_id: UUID (FK → users.id) - HITL 승인자 ID (없으면 None)
+    #   - action: TEXT - 조치 유형/코드 ("BROADCAST", "112_POLICE" 등)
+    #   - description: TEXT - 조치에 대한 상세 설명
+    #   - created_at: TIMESTAMP (자동생성)
+    #   - updated_at: TIMESTAMP (자동생성)
+    #
     # 형식: [
     #   {
-    #     "type": "field_action" | "emergency_call",  # 조치 유형
-    #     "action": "BROADCAST" | "112_POLICE" | ..., # 실행된 액션 코드
-    #     "log": "상세 설명 텍스트",                    # 액션 로그
-    #     "triggered_at": "2026-02-11T22:30:00"       # 발동 시각 (ISO 8601)
+    #     "action": "BROADCAST" | "112_POLICE" | ..., # 조치 유형/코드
+    #     "description": "상세 설명 텍스트",           # 조치 설명 (기존 log 대신 사용)
+    #     "user_id": "UUID" | None                   # HITL 승인자 ID (시스템 자동 시 None)
     #   }, ...
     # ]
-    actions: list                      # [S→M] 대응 조치 리스트 [{type, action, log, triggered_at}, ...]
+    actions: list                      # [S→M] 대응 조치 리스트 [{action, description, user_id}, ...]
     rag_references: list               # [S→M] 검색된 참조 문서들 [{type, content}, ...]
     embedding_stored: bool             # [M]   이벤트 임베딩 저장 여부 (store_embedding 노드)
     report_updated: bool               # [S→M] 보고서 백엔드 갱신 여부 (response_agent 서브그래프)
