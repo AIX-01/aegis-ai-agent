@@ -3,10 +3,11 @@
 """
 import logging
 import random
+import time
 import uuid
 from typing import List, Union, Literal, Optional
-from fastapi import FastAPI, Response, status
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Response, status, Request
+from pydantic import BaseModel
 import uvicorn
 
 # README.md 와 state.py 에 정의된 타입
@@ -65,7 +66,18 @@ class EventUpdateRequest(BaseModel):
     risk: Optional[RiskLevel] = None
     type: Optional[EventType] = None
     summary: Optional[str] = None
-    risk_score: Optional[str] = Field(default=None, alias="riskScore") # VARCHAR(10)
+    risk_score: Optional[str] = None  # VARCHAR(10)
+    report: Optional[dict] = None     # {content, files: {pdf, docx, pptx, hwp}, generated_at}
+    actions: Optional[list] = None    # 대응 조치 리스트
+
+class ReportUploadRequest(BaseModel):
+    """보고서 업로드 요청 (클립과 동일한 방식)"""
+    format: str  # pdf, docx, pptx, hwp
+
+class ReportUploadResponse(BaseModel):
+    """보고서 업로드 응답 - MinIO presigned URL 반환"""
+    upload_url: str
+    report_path: str
 
 
 # =========================
@@ -187,11 +199,83 @@ class MockBackendServer:
             return EventCreationResponse(event_id=event_id)
 
         # 2차 분석: 이벤트 갱신
-        @self.app.patch("/api/vlm-results/{event_id}/analysis", status_code=status.HTTP_204_NO_CONTENT)
+        @self.app.patch("/api/vlm-results/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
         async def update_event(event_id: str, payload: EventUpdateRequest):
-            self.logger.info(f"[백엔드 갱신] 2차 분석 결과 수신 (Event ID: {event_id}).")
-            self.logger.info(f"  - 데이터: {payload.model_dump_json(exclude_unset=True)}")
+            self.logger.info(f"[백엔드 갱신] 이벤트 갱신 수신 (Event ID: {event_id})")
+
+            # 기본 필드 출력
+            if payload.risk:
+                self.logger.info(f"  - risk: {payload.risk}")
+            if payload.type:
+                self.logger.info(f"  - type: {payload.type}")
+            if payload.summary:
+                self.logger.info(f"  - summary: {payload.summary[:100]}...")
+            if payload.risk_score:
+                self.logger.info(f"  - risk_score: {payload.risk_score}")
+
+            # 보고서 출력
+            if payload.report:
+                self.logger.info(f"  - report:")
+                if payload.report.get("content"):
+                    content_preview = payload.report["content"][:200].replace("\n", " ")
+                    self.logger.info(f"      content: {content_preview}...")
+                if payload.report.get("files"):
+                    self.logger.info(f"      files:")
+                    for fmt, url in payload.report["files"].items():
+                        self.logger.info(f"        {fmt}: {url or '(미생성)'}")
+                if payload.report.get("generated_at"):
+                    self.logger.info(f"      generated_at: {payload.report['generated_at']}")
+
+            # 대응 조치 출력
+            if payload.actions:
+                self.logger.info(f"  - actions ({len(payload.actions)}건):")
+                for i, action in enumerate(payload.actions, 1):
+                    action_type = action.get("type", "unknown")
+                    desc = action.get("description", "")[:80]
+                    self.logger.info(f"      [{i}] {action_type}: {desc}")
+
             return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+        # 보고서 업로드 URL 요청 (클립과 동일한 방식)
+        @self.app.post("/api/vlm-results/{event_id}/report", response_model=ReportUploadResponse)
+        async def get_report_upload_url(event_id: str, payload: ReportUploadRequest):
+            """보고서 업로드를 위한 로컬 저장 경로 반환 (Mock 모드)"""
+            report_format = payload.format.lower()
+            report_path = f"reports/{event_id}/report.{report_format}"
+
+            # Mock 모드: 로컬 저장 URL 생성
+            local_upload_url = f"http://localhost:{self.port}/api/vlm-results/{event_id}/report/upload?format={report_format}"
+
+            self.logger.info(f"[보고서 업로드 URL 요청] Event ID: {event_id}")
+            self.logger.info(f"  - format: {report_format}")
+            self.logger.info(f"  - report_path: {report_path}")
+
+            return ReportUploadResponse(
+                upload_url=local_upload_url,
+                report_path=report_path
+            )
+
+        # 보고서 실제 업로드 (로컬 저장)
+        @self.app.put("/api/vlm-results/{event_id}/report/upload")
+        async def upload_report_file(event_id: str, format: str, request: Request):
+            """보고서 파일을 로컬에 저장 (Mock 모드)"""
+            import os
+
+            # 프로젝트 루트 기준으로 저장 경로 설정
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            save_dir = os.path.join(project_root, "mock_reports", event_id)
+            os.makedirs(save_dir, exist_ok=True)
+
+            # 파일 저장
+            file_path = os.path.join(save_dir, f"report.{format}")
+            body = await request.body()
+
+            with open(file_path, "wb") as f:
+                f.write(body)
+
+            self.logger.info(f"✅ [보고서 로컬 저장 완료] {file_path} ({len(body)} bytes)")
+
+            return {"status": "saved", "path": file_path, "size": len(body)}
 
         # 클립 업로드 URL 발급
         @self.app.get("/api/vlm-results/{event_id}/clip/upload-url")
@@ -219,3 +303,73 @@ class MockBackendServer:
     def run(self):
         self.logger.info(f"[시작] 백엔드 서버를 {self.port} 포트에서 시작합니다")
         uvicorn.run(self.app, host="0.0.0.0", port=self.port, log_level="warning")
+
+
+# =========================
+# 단독 실행용 진입점
+# =========================
+def main():
+    """Mock 서버 단독 실행 (테스트/개발용)"""
+    import argparse
+    import threading
+
+    # 로깅 설정
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    parser = argparse.ArgumentParser(description="AEGIS Mock 서버")
+    parser.add_argument("--vlm", action="store_true", help="VLM Mock 서버 실행 (포트 8001)")
+    parser.add_argument("--precision", action="store_true", help="Precision Mock 서버 실행 (포트 8002)")
+    parser.add_argument("--backend", action="store_true", help="Backend Mock 서버 실행 (포트 8088)")
+    parser.add_argument("--all", action="store_true", help="모든 Mock 서버 실행")
+    args = parser.parse_args()
+
+    # 기본값: 아무 옵션도 없으면 모든 서버 실행
+    if not (args.vlm or args.precision or args.backend or args.all):
+        args.all = True
+
+    threads = []
+
+    if args.vlm or args.all:
+        vlm_server = MockVLMServer(port=8001)
+        t = threading.Thread(target=vlm_server.run, daemon=True)
+        t.start()
+        threads.append(("VLM", t))
+
+    if args.precision or args.all:
+        precision_server = MockPrecisionServer(port=8002)
+        t = threading.Thread(target=precision_server.run, daemon=True)
+        t.start()
+        threads.append(("Precision", t))
+
+    if args.backend or args.all:
+        backend_server = MockBackendServer(port=8088)
+        # 메인 스레드에서 백엔드 실행 (마지막 서버)
+        if not (args.vlm or args.precision or args.all):
+            backend_server.run()
+        else:
+            t = threading.Thread(target=backend_server.run, daemon=True)
+            t.start()
+            threads.append(("Backend", t))
+
+    if threads:
+        print("\n" + "="*60)
+        print("AEGIS Mock 서버 실행 중")
+        print("="*60)
+        for name, _ in threads:
+            print(f"  - {name} Mock 서버 실행 중...")
+        print("\n종료하려면 Ctrl+C를 누르세요.\n")
+
+        try:
+            # 모든 스레드가 종료될 때까지 대기
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n서버를 종료합니다...")
+
+
+if __name__ == "__main__":
+    main()
+

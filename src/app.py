@@ -214,6 +214,8 @@ async def lifespan(app: FastAPI):
         config.real_precision = True
     if args.real_backend:
         config.real_backend = True
+    if args.real_backend_events_only:
+        config.real_backend_events_only = True
 
     if args.log_level:
         config.log_level = args.log_level.upper()
@@ -255,6 +257,7 @@ def parse_args():
     parser.add_argument("--real-vlm", action="store_true", help="VLM 실제 서버 사용")
     parser.add_argument("--real-precision", action="store_true", help="정밀 분석 실제 서버 사용")
     parser.add_argument("--real-backend", action="store_true", help="백엔드 실제 서버 사용")
+    parser.add_argument("--real-backend-events-only", action="store_true", help="1차/2차 갱신 + 클립은 실제 백엔드, 보고서만 Mock")
     parser.add_argument("--log-level", type=str, help="로깅 레벨 (DEBUG, INFO, WARNING, ERROR)")
     return parser.parse_args()
 

@@ -27,7 +27,8 @@ class BackendClient:
         self.create_endpoint = config.backend_create_endpoint
         self.update_endpoint_template = config.backend_update_endpoint
         self.clip_endpoint_template = config.backend_clip_endpoint # 추가됨
-        
+        self.report_endpoint_template = config.backend_report_endpoint # 추가됨
+
         self.timeout = config.backend_timeout
         self.max_retries = config.backend_max_retries
         self.retry_delay = config.backend_retry_delay
@@ -105,7 +106,7 @@ class BackendClient:
 
         Args:
             event_id: 갱신할 이벤트 ID
-            detail_result: 상세 분석 결과 (risk, type, summary, risk_score 등)
+            detail_result: 상세 분석 결과 (risk, type, summary, risk_score, report, actions 등)
 
         Returns:
             성공 여부
@@ -120,6 +121,8 @@ class BackendClient:
             "type": detail_result.get("type"),
             "summary": detail_result.get("summary"),
             "riskScore": f"{risk_score:.2f}" if isinstance(risk_score, float) else str(risk_score) if risk_score is not None else None,
+            "report": detail_result.get("report"),   # 보고서 Dict 추가
+            "actions": detail_result.get("actions"), # 대응 조치 리스트 추가
         }
         final_payload = {k: v for k, v in payload.items() if v is not None}
 
@@ -228,3 +231,112 @@ class BackendClient:
                     time.sleep(self.retry_delay)
 
         return False
+
+    # =========================================
+    # 보고서 업로드 관련 메서드
+    # =========================================
+    def get_report_upload_url(self, event_id: str, report_format: str) -> Optional[Dict[str, str]]:
+        """
+        보고서 업로드용 presigned URL 요청
+        POST /internal/agent/events/{event_id}/report
+
+        Args:
+            event_id: 이벤트 ID
+            report_format: 보고서 포맷 (pdf, docx, pptx, hwp)
+
+        Returns:
+            {"upload_url": presigned URL, "report_path": 저장 경로} 또는 None
+        """
+        endpoint = self.report_endpoint_template.format(event_id=event_id)
+
+        try:
+            response = requests.post(
+                endpoint,
+                json={"format": report_format},
+                timeout=self.timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            upload_url = data.get("upload_url") or data.get("uploadUrl")
+            report_path = data.get("report_path") or data.get("reportPath")
+
+            self.logger.debug(f"[보고서 업로드 URL 획득] Event ID: {event_id}, Format: {report_format}")
+            return {"upload_url": upload_url, "report_path": report_path}
+
+        except Exception as e:
+            self.logger.error(f"❌ [보고서 업로드 URL 요청 실패] {event_id}: {e}")
+            return None
+
+    def upload_report(self, upload_url: str, file_data: bytes, content_type: str) -> bool:
+        """
+        presigned URL로 보고서 직접 업로드 (S3/MinIO 또는 Mock 로컬)
+
+        Args:
+            upload_url: presigned PUT URL
+            file_data: 보고서 바이너리 데이터
+            content_type: MIME 타입 (예: application/pdf)
+
+        Returns:
+            성공 여부
+        """
+        try:
+            response = requests.put(
+                upload_url,
+                data=file_data,
+                headers={"Content-Type": content_type},
+                timeout=60
+            )
+            response.raise_for_status()
+
+            self.logger.info(f"✅ [보고서 업로드 성공] {len(file_data)} bytes")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"❌ [보고서 업로드 실패]: {e}")
+            return False
+
+    def upload_all_reports(self, event_id: str, reports: Dict[str, bytes]) -> Dict[str, Optional[str]]:
+        """
+        모든 포맷의 보고서를 업로드하고 경로 반환
+
+        Args:
+            event_id: 이벤트 ID
+            reports: {"pdf": bytes, "docx": bytes, ...}
+
+        Returns:
+            {"pdf": "path", "docx": "path", ...}
+        """
+        content_types = {
+            "pdf": "application/pdf",
+            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "hwp": "application/x-hwp"
+        }
+
+        result: Dict[str, Optional[str]] = {}
+
+        for report_format, file_data in reports.items():
+            if not file_data:
+                result[report_format] = None
+                continue
+
+            # 1. presigned URL 획득
+            url_info = self.get_report_upload_url(event_id, report_format)
+            if not url_info:
+                self.logger.error(f"❌ [보고서 URL 획득 실패] {event_id} - {report_format}")
+                result[report_format] = None
+                continue
+
+            # 2. 업로드
+            content_type = content_types.get(report_format, "application/octet-stream")
+            success = self.upload_report(url_info["upload_url"], file_data, content_type)
+
+            if success:
+                result[report_format] = url_info["report_path"]
+                self.logger.info(f"✅ [보고서 업로드 완료] {event_id} - {report_format}: {url_info['report_path']}")
+            else:
+                result[report_format] = None
+
+        return result

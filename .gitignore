@@ -48,5 +48,11 @@ Thumbs.db
 
 # Temporary files
 tmp/
-temp/
-*.tmp
+temp*.tmp
+
+# Mock 보고서 (README만 유지)
+mock_reports/*
+!mock_reports/README.md
+
+# env
+.env

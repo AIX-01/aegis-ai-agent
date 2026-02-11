@@ -18,6 +18,7 @@ idna==3.11
 jsonpatch==1.33
 jsonpointer==3.0.0
 langchain-core==1.2.7
+langchain-openai>=0.1.0
 langgraph==1.0.7
 langgraph-checkpoint==4.0.0
 langgraph-prebuilt==1.0.7
@@ -46,3 +47,11 @@ uvicorn==0.40.0
 xxhash==3.6.0
 zstandard==0.25.0
 av==16.1.0
+
+# Report Generation
+python-docx>=1.0.0
+python-pptx>=1.0.0
+pdfkit>=1.0.0
+Pillow>=10.0.0
+# weasyprint>=60.0  # Linux/Docker에서만 사용 (Windows는 wkhtmltopdf 사용)
+

@@ -1,15 +1,15 @@
 import functools
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, END, START
 from .state import AnalysisState
 from .nodes import (
     verification_node,
     precision_analysis_node,
-    action_node,
     update_backend_node,
-    generate_report_node
+    store_embedding_node,
 )
-from .edges import analysis_router, verification_router
-from ..clients import VLMClient, PrecisionClient, BackendClient, VerificationClient
+from .subgraphs import response_agent_node
+from .edges import verification_router
+from ..clients import PrecisionClient, BackendClient
 from ..config import Config
 
 def build_graph(config: Config):
@@ -21,17 +21,13 @@ def build_graph(config: Config):
     
     [워크플로우 흐름]
     (Pre-Graph: VLM 분석 -> 백엔드 1차 보고 -> Event ID 생성)
-    1. Analysis Router (Entry Point): 
-       - ABNORMAL -> Precision Analysis (정밀 분석)
-       - SUSPICIOUS -> Verification (검증)
-       - NORMAL -> End (종료)
-    2. Verification:
-       - 검증 결과 ABNORMAL 격상 -> Precision Analysis
-       - SUSPICIOUS 유지 -> 종료
-    3. Precision Analysis: LLM 기반 상세 분석 수행
-    4. Update Backend: 최종 분석 결과로 백엔드 이벤트 갱신
-    5. Action: 대응 조치 결정
-    6. Generate Report: 최종 보고서 생성
+
+    1. precision_analysis: LLM 기반 정밀 분석 수행
+    2. verification: 정밀 분석 결과 검증
+    3. update_backend: 검증 결과로 백엔드 갱신
+    4. verification_router: 검증 결과에 따른 분기
+       - ABNORMAL → response_agent (ReAct Agent) → store_embedding (순차) → END
+       - SUSPICIOUS → END
 
     Args:
         config: 시스템 설정 객체
@@ -40,50 +36,47 @@ def build_graph(config: Config):
         컴파일된 LangGraph 객체
     """
     # 클라이언트 초기화
-    verification_client = VerificationClient(config)
     precision_client = PrecisionClient(config)
     backend_client = BackendClient(config)
 
-    # 노드에 클라이언트 바인딩
-    verification = functools.partial(verification_node, verification_client=verification_client)
+    # 노드에 클라이언트/설정 바인딩
+    verification = functools.partial(verification_node, config=config)
     precision_analysis = functools.partial(precision_analysis_node, precision_client=precision_client)
     update_backend = functools.partial(update_backend_node, backend_client=backend_client)
+    store_embedding = functools.partial(store_embedding_node, config=config)
+    response_agent = functools.partial(response_agent_node, config=config)
 
     # 그래프 빌더
     workflow = StateGraph(AnalysisState)
 
-    # 노드 추가 (backend_report 제외)
-    workflow.add_node("verification", verification)
+    # 노드 추가
     workflow.add_node("precision_analysis", precision_analysis)
-    workflow.add_node("action", action_node)
+    workflow.add_node("verification", verification)
     workflow.add_node("update_backend", update_backend)
-    workflow.add_node("generate_report", generate_report_node)
+    workflow.add_node("store_embedding", store_embedding)
+    workflow.add_node("response_agent", response_agent)  # ReAct Agent 서브그래프
 
-    # 그래프 진입점 설정: 상태에 따라 바로 분기 (Conditional Entry Point)
-    workflow.set_conditional_entry_point(
-        analysis_router,
-        {
-            "verification": "verification",
-            "precision_analysis": "precision_analysis",
-            "end": END
-        }
-    )
+    # 그래프 진입점: START → precision_analysis
+    workflow.add_edge(START, "precision_analysis")
 
-    # 검증 후 라우터
+    # precision_analysis → verification → update_backend
+    workflow.add_edge("precision_analysis", "verification")
+    workflow.add_edge("verification", "update_backend")
+
+    # update_backend → verification_router (조건부 분기)
+    # ABNORMAL이면 response_agent로, SUSPICIOUS면 END로
     workflow.add_conditional_edges(
-        "verification",
+        "update_backend",
         verification_router,
         {
-            "precision_analysis": "precision_analysis",
+            "response_agent": "response_agent",
             "end": END
         }
     )
 
-    # 정밀 분석 -> 백엔드 갱신 -> 대응 조치 -> 리포트 생성 -> 종료
-    workflow.add_edge("precision_analysis", "update_backend")
-    workflow.add_edge("update_backend", "action")
-    workflow.add_edge("action", "generate_report")
-    workflow.add_edge("generate_report", END)
+    # response_agent → store_embedding → END (순차 실행)
+    workflow.add_edge("response_agent", "store_embedding")
+    workflow.add_edge("store_embedding", END)
 
     # 그래프 컴파일
     return workflow.compile()

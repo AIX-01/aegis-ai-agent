@@ -214,24 +214,45 @@ class VectorStoreClient:
         """
         문서를 벡터 DB에 추가합니다.
 
+        [Qdrant 저장 구조]
+        {
+            id: 문서 ID (해시값),
+            vector: text_field 값을 임베딩한 1536차원 벡터,
+            payload: data 전체 (메타데이터)
+        }
+
+        [vector 생성 과정]
+        data[text_field] (문자열)
+            ↓
+        OpenAI text-embedding-3-small 모델
+            ↓
+        vector: [0.012, -0.034, ...] (1536차원 float 배열)
+
         Args:
             collection_name: 컬렉션 이름
             doc_id: 문서 ID
-            data: 저장할 데이터 (payload)
-            text_field: 임베딩할 텍스트가 있는 필드명
+            data: 저장할 데이터 (payload로 저장됨)
+            text_field: 임베딩할 텍스트가 있는 필드명 (이 필드 값이 vector로 변환됨)
 
         Returns:
             성공 여부
         """
         try:
+            # 임베딩할 텍스트 추출
             text = data.get(text_field, "")
             if not text:
                 logger.warning(f"문서 '{doc_id}'에 '{text_field}' 필드가 없습니다.")
                 return False
 
+            # 텍스트를 벡터로 변환 (OpenAI Embedding API 호출)
+            # 결과: [0.012, -0.034, 0.056, ...] 형태의 1536차원 float 배열
             embedding = self._encode(text)
             numeric_id = self._generate_id(doc_id)
 
+            # Qdrant에 저장
+            # - id: 문서 식별자
+            # - vector: 임베딩된 벡터 (유사도 검색에 사용)
+            # - payload: 메타데이터 (필터링, 결과 표시에 사용)
             self.client.upsert(
                 collection_name=collection_name,
                 points=[PointStruct(
