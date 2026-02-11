@@ -161,6 +161,12 @@ def _create_exec_function(code: str, parameters: Dict[str, Any]) -> Callable:
     """
     def execute_action(**kwargs) -> str:
         try:
+            # 필요한 모듈 미리 import
+            import requests
+            import json
+            import datetime
+            import urllib.parse
+
             # 기본값 적용
             for param_name, param_info in parameters.items():
                 if param_name not in kwargs or kwargs[param_name] is None:
@@ -168,9 +174,10 @@ def _create_exec_function(code: str, parameters: Dict[str, Any]) -> Callable:
                     if default_value is not None and default_value != "":
                         kwargs[param_name] = default_value
 
-            # 제한된 실행 환경
+            # 제한된 실행 환경 (자주 사용하는 모듈 포함)
             safe_globals = {
                 "__builtins__": {
+                    "__import__": __import__,  # import 문 지원
                     "print": print,
                     "str": str,
                     "int": int,
@@ -195,7 +202,12 @@ def _create_exec_function(code: str, parameters: Dict[str, Any]) -> Callable:
                     "Exception": Exception,
                     "ValueError": ValueError,
                     "TypeError": TypeError,
-                }
+                },
+                # 허용된 모듈
+                "requests": requests,
+                "json": json,
+                "datetime": datetime,
+                "urllib": urllib,
             }
 
             # 코드 실행하여 execute 함수 추출
