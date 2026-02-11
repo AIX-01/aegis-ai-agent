@@ -21,7 +21,7 @@ class Config:
     # ===================================================================
     # >> 1. 실제 서버 주소 설정 (이 부분을 실제 운영 서버에 맞게 수정하세요)
     # ===================================================================
-    _real_vlm_endpoint: str = "https://ntm38sypf1injr-8000.proxy.runpod.net/v1"
+    _real_vlm_endpoint: str = "https://dr6uibzh92ueyk-8000.proxy.runpod.net/v1"
     _real_vlm_api_key: str = "sk-IrR7Bwxtin0haWagUnPrBgq5PurnUz86"
     _real_vlm_model_id: str = "AIX-01/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit-3000steps-r64-b8-merged-16bit"
     # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨

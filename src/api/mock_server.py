@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import List, Union, Literal, Optional
 from fastapi import FastAPI, Response, status, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 # README.md 와 state.py 에 정의된 타입
