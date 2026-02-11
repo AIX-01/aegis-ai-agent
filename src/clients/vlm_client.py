@@ -2,6 +2,7 @@
 재시도 및 타임아웃 처리를 포함한 VLM API 클라이언트
 """
 import logging
+import re
 import time
 import base64
 from typing import List, Dict, Any, Optional
@@ -94,37 +95,41 @@ class VLMClient:
                 # 결과 딕셔너리 생성
                 result = {"raw_output": raw_text, "analysis_duration": duration}
 
-                # 결과 파싱 (class1, class2 추출 및 정규화)
-                lines = raw_text.replace(',', '\n').split('\n')
-                for line in lines:
-                    if '=' in line:
-                        parts = line.split('=', 1)
-                        if len(parts) == 2:
-                            key = parts[0].strip().lower()
-                            val = parts[1].strip().lower().strip('<>')
-                            result[key] = val
+                # regex 기반 파싱 (출력 포맷 변동에 강건)
+                # class1: 단일 단어만 캡처 → 주변 텍스트에 오염되지 않음
+                m = re.search(r'class1\s*=\s*(\w+)', raw_text, re.IGNORECASE)
+                if m:
+                    result["class1"] = m.group(1).lower()
 
-                # class1이 없을 경우 키워드 검색으로 보완
+                # class2: 단일 단어만 캡처
+                m = re.search(r'class2\s*=\s*(\w+)', raw_text, re.IGNORECASE)
+                if m:
+                    result["class2"] = m.group(1).lower()
+
+                # vlm_summary: = 이후 줄 끝까지 캡처
+                m = re.search(r'vlm_summary\s*=\s*(.+?)(?:\n|$)', raw_text, re.IGNORECASE)
+                if m:
+                    result["vlm_summary"] = m.group(1).strip().strip('<>')
+
+                # class1 폴백: regex 실패 시 키워드 검색
                 if "class1" not in result:
-                    if "normal" in raw_text.lower():
-                        result["class1"] = "normal"
-                    elif "abnormal" in raw_text.lower():
-                        result["class1"] = "abnormal"
-                    elif "suspicious" in raw_text.lower():
-                        result["class1"] = "suspicious"
+                    text_lower = raw_text.lower()
+                    for keyword in ["abnormal", "suspicious", "normal"]:
+                        if keyword in text_lower:
+                            result["class1"] = keyword
+                            break
 
-                # class2가 없을 경우 키워드 검색으로 보완
+                # class2 폴백: regex 실패 시 키워드 검색
                 if "class2" not in result:
-                    if "assault" in raw_text.lower():
-                        result["class2"] = "assault"
-                    elif "dump" in raw_text.lower():
-                        result["class2"] = "dump"
-                    elif "burglary" in raw_text.lower():
-                        result["class2"] = "burglary"
-                    elif "swoon" in raw_text.lower():
-                        result["class2"] = "swoon"
-                    elif "vandalism" in raw_text.lower():
-                        result["class2"] = "vandalism"
+                    text_lower = raw_text.lower()
+                    for keyword in ["assault", "dump", "burglary", "swoon", "vandalism"]:
+                        if keyword in text_lower:
+                            result["class2"] = keyword
+                            break
+
+                # vlm_summary 폴백
+                if "vlm_summary" not in result:
+                    result["vlm_summary"] = ""
 
                 # 로그 출력
                 if result.get("class1") == "normal":

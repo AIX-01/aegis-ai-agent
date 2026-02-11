@@ -21,7 +21,7 @@ class Config:
     # ===================================================================
     # >> 1. 실제 서버 주소 설정 (이 부분을 실제 운영 서버에 맞게 수정하세요)
     # ===================================================================
-    _real_vlm_endpoint: str = "https://apsj89ztypyzpr-8000.proxy.runpod.net/v1"
+    _real_vlm_endpoint: str = "https://ntm38sypf1injr-8000.proxy.runpod.net/v1"
     _real_vlm_api_key: str = "sk-IrR7Bwxtin0haWagUnPrBgq5PurnUz86"
     _real_vlm_model_id: str = "AIX-01/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit-3000steps-r64-b8-merged-16bit"
     # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨
@@ -156,6 +156,7 @@ Input: frames at 1 FPS in chronological order. Predict what situation is occurri
 Output exactly:
 class1=<normal|suspicious|abnormal>
 class2=<assault|burglary|dump|swoon|vandalism>
+vlm_summary=<one sentence English summary of the observed situation>
 
 No extra text."""
 
@@ -209,6 +210,78 @@ JSON만 출력하세요."""
     # Verification 재시도 설정
     verification_max_retries: int = 3
     verification_retry_delay: float = 1.0
+
+    # =========================================
+    # Action 대응 조치 시스템 프롬프트
+    # =========================================
+    action_system_prompt: str = """당신은 CCTV 기반 이상 상황 대응 시스템의 조치 결정 전문가입니다.
+
+## 역할
+분석된 이벤트 정보를 바탕으로 즉각 실행해야 할 대응 조치 목록을 결정합니다.
+
+## 이벤트 유형별 대응 지침
+- ASSAULT (폭행): 경찰(112) 신고, 현장 보안요원 긴급 출동, 주변 CCTV 확대 감시
+- BURGLARY (침입/절도): 경찰(112) 신고, 출입구 봉쇄, 보안요원 출동, 증거 영상 확보
+- DUMP (무단 투기): 증거 영상 저장, 관할 구청 신고, 현장 청소팀 통보
+- SWOON (실신/쓰러짐): 구급대(119) 신고, 인근 직원 현장 출동, 주변 안전 확보
+- VANDALISM (기물 파손): 보안요원 출동, 증거 영상 확보, 경찰(112) 신고
+
+## 우선순위 기준
+- CRITICAL: 인명 관련 즉각 대응 (신고, 긴급 출동)
+- HIGH: 현장 통제 및 보안 조치
+- MEDIUM: 증거 확보 및 기록
+- LOW: 후속 행정 처리
+
+## 출력 형식 (JSON만 출력)
+{
+  "actions": [
+    {
+      "action": "조치 내용",
+      "priority": "CRITICAL|HIGH|MEDIUM|LOW",
+      "target": "조치 대상 (예: 경찰서, 보안팀, 구급대)",
+      "message": "전달 메시지 요약"
+    }
+  ]
+}
+
+JSON만 출력하세요."""
+
+    action_max_retries: int = 3
+    action_retry_delay: float = 1.0
+
+    # =========================================
+    # Report 보고서 생성 시스템 프롬프트
+    # =========================================
+    report_system_prompt: str = """당신은 CCTV 이상 상황 사건 보고서 작성 전문가입니다.
+
+## 역할
+제공된 사건 데이터를 바탕으로 간결하고 구조화된 사건 보고서를 작성합니다.
+
+## 보고서 형식 (아래 형식을 정확히 따르세요)
+
+# 사건 보고서
+
+## 1. 개요
+| 항목 | 내용 |
+|------|------|
+| 카메라 | (카메라명 및 ID) |
+| 위치 | (위치) |
+| 발생 시각 | (시각) |
+| 이벤트 유형 | (유형) |
+| 위험 등급 | (등급) |
+| 위험 점수 | (점수) |
+
+## 2. 상황 분석
+(1차 VLM 분석과 정밀 분석 결과를 종합하여 2-3문장으로 상황 서술)
+
+## 3. 대응 조치
+(결정된 조치를 우선순위 순서로 나열)
+
+## 4. 권고 사항
+(추가적으로 필요한 후속 조치나 주의사항을 1-2문장으로 작성)"""
+
+    report_max_retries: int = 3
+    report_retry_delay: float = 1.0
 
     # =========================================
     # LangSmith 추적 설정 (팀원별 .env에서 LANGSMITH_PROJECT 변경)

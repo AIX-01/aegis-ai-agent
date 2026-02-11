@@ -18,6 +18,7 @@ class AnalysisState(TypedDict):
     frames: List[bytes]
     event_id: str
     vlm_result: Dict[str, Any]         # 1차 VLM 분석 원본 결과
+    vlm_summary: str                    # VLM 1차 분석 상황 요약 (영문)
     window_start: Union[int, str] # 윈도우 시작 시간 추가
     window_end: Union[int, str]   # 윈도우 종료 시간 추가
     

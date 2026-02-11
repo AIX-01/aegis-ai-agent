@@ -146,17 +146,15 @@ class VerificationClient:
         """
         vlm_class1 = vlm_result.get("class1", "unknown")
         vlm_class2 = vlm_result.get("class2", "unknown")
-        vlm_raw = vlm_result.get("raw_output", "N/A")
+        vlm_summary = vlm_result.get("vlm_summary", "N/A")
 
         context = f"""
 ## 입력 정보
 - 카메라 ID: {camera_id}
 - 1차 VLM 분석 결과: class1={vlm_class1}, class2={vlm_class2}
+- 상황 요약: {vlm_summary}
 - 발생 시각: {task_metadata.get('occurred_at', 'N/A')}
 - 분석 구간: {task_metadata.get('window_start', 0)} ~ {task_metadata.get('window_end', 0)}
-
-## VLM 원본 응답
-{vlm_raw[:500]}
 """
         return self.system_prompt + context
 

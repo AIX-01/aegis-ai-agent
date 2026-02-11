@@ -9,7 +9,7 @@ from .nodes import (
     generate_report_node
 )
 from .edges import analysis_router, verification_router
-from ..clients import VLMClient, PrecisionClient, BackendClient, VerificationClient
+from ..clients import VLMClient, PrecisionClient, BackendClient, VerificationClient, ActionClient, ReportClient
 from ..config import Config
 
 def build_graph(config: Config):
@@ -43,21 +43,25 @@ def build_graph(config: Config):
     verification_client = VerificationClient(config)
     precision_client = PrecisionClient(config)
     backend_client = BackendClient(config)
+    action_client = ActionClient(config)
+    report_client = ReportClient(config)
 
     # 노드에 클라이언트 바인딩
     verification = functools.partial(verification_node, verification_client=verification_client)
     precision_analysis = functools.partial(precision_analysis_node, precision_client=precision_client)
     update_backend = functools.partial(update_backend_node, backend_client=backend_client)
+    action = functools.partial(action_node, action_client=action_client)
+    generate_report = functools.partial(generate_report_node, report_client=report_client)
 
     # 그래프 빌더
     workflow = StateGraph(AnalysisState)
 
-    # 노드 추가 (backend_report 제외)
+    # 노드 추가
     workflow.add_node("verification", verification)
     workflow.add_node("precision_analysis", precision_analysis)
-    workflow.add_node("action", action_node)
+    workflow.add_node("action", action)
     workflow.add_node("update_backend", update_backend)
-    workflow.add_node("generate_report", generate_report_node)
+    workflow.add_node("generate_report", generate_report)
 
     # 그래프 진입점 설정: 상태에 따라 바로 분기 (Conditional Entry Point)
     workflow.set_conditional_entry_point(

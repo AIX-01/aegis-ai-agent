@@ -184,6 +184,7 @@ class ConsumerPool:
                             "occurred_at": occurred_at,
                             "frames": frames,
                             "vlm_result": vlm_result,
+                            "vlm_summary": vlm_result.get("vlm_summary", ""),
                             "risk_level": risk_level,
                             "event_type": event_type,
                             "event_id": event_id,

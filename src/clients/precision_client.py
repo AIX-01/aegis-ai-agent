@@ -153,11 +153,13 @@ class PrecisionClient:
         """
         vlm_risk = vlm_metadata.get("risk_level", "UNKNOWN")
         vlm_event = vlm_metadata.get("event_type", "UNKNOWN")
+        vlm_summary = vlm_metadata.get("vlm_summary", "N/A")
 
         context = f"""
 ## 입력 정보
 - 카메라 ID: {camera_id}
 - 1차 분석 결과: {vlm_risk} / {vlm_event}
+- 상황 요약: {vlm_summary}
 - 발생 시각: {task_metadata.get('occurred_at', 'N/A')}
 - 분석 구간: {task_metadata.get('window_start', 0)} ~ {task_metadata.get('window_end', 0)}
 """
