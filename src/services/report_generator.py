@@ -104,56 +104,137 @@ class ReportGeneratorService:
         risk_score = report_data.get("risk_score", 0)
         if isinstance(risk_score, float):
             risk_score_str = f"{risk_score:.2f}"
+            risk_score_percent = f"{int(risk_score * 100)}%"
+        elif isinstance(risk_score, str):
+            try:
+                score_float = float(risk_score)
+                risk_score_str = f"{score_float:.2f}"
+                risk_score_percent = f"{int(score_float * 100)}%"
+            except ValueError:
+                risk_score_str = risk_score
+                risk_score_percent = risk_score
         else:
             risk_score_str = str(risk_score)
+            risk_score_percent = str(risk_score)
 
-        # actions 포맷팅
+        # 위험도 레벨 관련 포맷팅
+        risk_level = report_data.get("risk_level", "").upper()
+        risk_class = "risk-high" if risk_level == "ABNORMAL" else "risk-warning"
+        risk_text = "위험 (ABNORMAL)" if risk_level == "ABNORMAL" else "의심 (SUSPICIOUS)"
+
+        # 분석 상태 포맷팅
+        status = report_data.get("status", "").upper()
+        status_text = "분석 완료" if status == "ANALYZED" else "분석 중"
+
+        # 이벤트 타입 한글 변환
+        event_type = report_data.get("event_type", "")
+        event_type_korean = self._get_event_type_korean(event_type)
+
+        # actions 포맷팅 (DOCX/PPTX/HTML 통합)
         actions = report_data.get("actions", [])
-        actions_html = "\n".join([f"        <li>{a.get('description', '')}</li>" for a in actions])
+        actions_html = self._format_actions_html(actions)
         actions_text = "\n".join([f"• {a.get('description', '')}" for a in actions])
 
-        # HTML용 이미지 태그
-        frames_html = self._frames_to_html(frames)
+        # frame_timestamps 추출
+        frame_timestamps = report_data.get("frame_timestamps", [])
+
+        # HTML용 이미지 태그 (timestamp 포함)
+        frames_html = self._frames_to_html(frames, frame_timestamps)
 
         return {
+            # 기본 정보
+            "event_id": report_data.get("event_id", ""),
             "occurred_at": occurred_at_str,
-            "event_type": report_data.get("event_type", ""),
+            "event_type": event_type,
+            "event_type_korean": event_type_korean,
             "camera_name": report_data.get("camera_name", ""),
             "camera_location": report_data.get("camera_location", ""),
-            "risk_level": report_data.get("risk_level", ""),
+            # 위험도 관련
+            "risk_level": risk_level,
+            "risk_class": risk_class,
+            "risk_text": risk_text,
             "risk_score": risk_score_str,
-            "summary": report_data.get("summary", ""),
+            "risk_score_percent": risk_score_percent,
+            # 상태
+            "status_text": status_text,
+            # 요약
+            "summary": report_data.get("summary", "요약 정보가 없습니다."),
+            # 대응 조치 (HTML/DOCX/PPTX 통합)
             "actions": actions_html,
             "actions_text": actions_text,
+            # 프레임
             "frames": frames_html,
+            # 메타
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "version": report_data.get("version", "1.0"),
         }
 
-    def _frames_to_html(self, frames: List[bytes]) -> str:
-        """프레임들을 HTML 테이블로 변환 (4x2 그리드)"""
+    def _get_event_type_korean(self, event_type: str) -> str:
+        """이벤트 타입을 한글로 변환합니다."""
+        type_map = {
+            "ASSAULT": "폭행",
+            "assault": "폭행",
+            "BURGLARY": "침입/절도",
+            "burglary": "침입/절도",
+            "DUMP": "불법투기",
+            "dump": "불법투기",
+            "SWOON": "실신",
+            "swoon": "실신",
+            "VANDALISM": "기물파손",
+            "vandalism": "기물파손",
+        }
+        return type_map.get(event_type, event_type)
+
+    def _format_actions_html(self, actions: List[Dict[str, Any]]) -> str:
+        """대응 조치 리스트를 HTML로 변환합니다."""
+        if not actions:
+            return '<div class="no-actions">권장 대응 절차가 없습니다.</div>'
+
+        html_parts = []
+        for idx, action in enumerate(actions):
+            step = action.get("step", idx + 1)
+            title = action.get("title", "조치")
+            description = action.get("description", "")
+            html_parts.append(
+                f'<div class="action-item">\n'
+                f'  <div class="action-header">{step}. {title}</div>\n'
+                f'  <div class="action-content">{description}</div>\n'
+                f'</div>'
+            )
+        return '\n'.join(html_parts)
+
+    def _frames_to_html(self, frames: List[bytes], frame_timestamps: List = None) -> str:
+        """프레임들을 HTML로 변환 (4열 그리드, 타임스탬프 표시)"""
         if not frames:
-            return "<p>이미지 없음</p>"
+            return '<div class="no-frames">시간 별 상황 정보가 없습니다.</div>'
 
-        html_parts = ['<table style="width: 100%; border-collapse: collapse; table-layout: fixed;">']
+        if frame_timestamps is None:
+            frame_timestamps = []
 
-        for row in range(2):
-            html_parts.append('<tr>')
-            for col in range(4):
-                idx = row * 4 + col
-                if idx < len(frames):
-                    b64 = base64.b64encode(frames[idx]).decode('utf-8')
-                    html_parts.append(
-                        f'<td style="width: 25%; padding: 4px; text-align: center; vertical-align: top;">'
-                        f'<img src="data:image/jpeg;base64,{b64}" '
-                        f'alt="Frame {idx+1}" '
-                        f'style="width: 100%; max-width: 180px; border: 1px solid #ddd;">'
-                        f'</td>'
-                    )
+        html_parts = ['<div class="frames-grid">']
+        for idx, frame in enumerate(frames[:8]):
+            b64 = base64.b64encode(frame).decode('utf-8')
+
+            # 타임스탬프 포맷팅 (시:분:초)
+            if idx < len(frame_timestamps) and frame_timestamps[idx]:
+                ts = frame_timestamps[idx]
+                if hasattr(ts, 'strftime'):
+                    # datetime 객체인 경우
+                    time_label = ts.strftime("%H:%M:%S")
                 else:
-                    html_parts.append('<td></td>')
-            html_parts.append('</tr>')
+                    # 문자열인 경우 그대로 사용
+                    time_label = str(ts)
+            else:
+                # 타임스탬프가 없으면 프레임 번호 사용
+                time_label = f"프레임 {idx+1}"
 
-        html_parts.append('</table>')
+            html_parts.append(
+                f'<div class="frame-item">\n'
+                f'  <img src="data:image/jpeg;base64,{b64}" alt="{time_label}" />\n'
+                f'  <div class="frame-label">{time_label}</div>\n'
+                f'</div>'
+            )
+        html_parts.append('</div>')
         return '\n'.join(html_parts)
 
     def _generate_html(self, data: Dict[str, Any], frames: List[bytes]) -> Optional[bytes]:
@@ -181,49 +262,35 @@ class ReportGeneratorService:
             return None
 
     def _html_to_pdf(self, html_bytes: bytes) -> Optional[bytes]:
-        """HTML을 PDF로 변환"""
+        """HTML을 PDF로 변환 (Playwright/Chromium 사용)"""
         try:
-            import pdfkit
-            import platform
+            from playwright.sync_api import sync_playwright
 
-            # Windows에서 wkhtmltopdf 경로 지정
-            config = None
-            if platform.system() == "Windows":
-                wkhtmltopdf_path = r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe"
-                if os.path.exists(wkhtmltopdf_path):
-                    config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_path)
+            # HTML 문자열로 변환
+            html_string = html_bytes.decode('utf-8')
 
-            options = {
-                'encoding': 'UTF-8',
-                'enable-local-file-access': ''
-            }
+            with sync_playwright() as p:
+                # Chromium 브라우저 실행
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
 
-            # 임시 파일로 변환
-            with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as tmp_html:
-                tmp_html.write(html_bytes)
-                tmp_html_path = tmp_html.name
+                # HTML 콘텐츠 로드
+                page.set_content(html_string, wait_until='networkidle')
 
-            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-                tmp_pdf_path = tmp_pdf.name
+                # PDF로 변환
+                pdf_bytes = page.pdf(
+                    format='A4',
+                    print_background=True,
+                    margin={'top': '10mm', 'right': '10mm', 'bottom': '10mm', 'left': '10mm'}
+                )
 
-            try:
-                if config:
-                    pdfkit.from_file(tmp_html_path, tmp_pdf_path, configuration=config, options=options)
-                else:
-                    pdfkit.from_file(tmp_html_path, tmp_pdf_path, options=options)
+                browser.close()
 
-                with open(tmp_pdf_path, "rb") as f:
-                    pdf_bytes = f.read()
-
-                logger.info("PDF 보고서 생성 완료")
-                return pdf_bytes
-
-            finally:
-                os.unlink(tmp_html_path)
-                os.unlink(tmp_pdf_path)
+            logger.info("PDF 보고서 생성 완료 (Playwright)")
+            return pdf_bytes
 
         except ImportError:
-            logger.warning("pdfkit 설치 필요: pip install pdfkit")
+            logger.warning("playwright 설치 필요: pip install playwright && python -m playwright install chromium")
             return None
         except Exception as e:
             logger.error(f"PDF 변환 실패: {e}")
