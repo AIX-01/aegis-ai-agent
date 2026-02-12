@@ -350,6 +350,11 @@ def create_agent_node(config: Config, tools: list):
     - 요일 패턴: [요일]에 [N]건 발생
     - 장소 패턴: [장소명]에서 반복 발생 여부
     
+    ### 법적 근거
+    [대응 매뉴얼에서 제공된 법적 근거를 인용하여 작성]
+    - 관련 법령: [법령명 및 조항]
+    - 적용 사유: [해당 법령이 적용되는 이유 간략히]
+    
     ### 판단 근거
     [과거 사례와 매뉴얼을 참고하여 선택 이유 1~2문장으로 설명]
     
@@ -367,6 +372,10 @@ def create_agent_node(config: Config, tools: list):
     - 요일 패턴: 월요일 2건, 토요일 1건
     - 장소 패턴: 후문 CCTV에서 반복 발생 중
     
+    ### 법적 근거
+    - 관련 법령: 폐기물관리법 제8조 (폐기물의 투기 금지)
+    - 적용 사유: 지정된 장소가 아닌 곳에 폐기물 투기 행위 확인
+    
     ### 판단 근거
     과거 사례에서 현장 방송 경고가 67% 사용되었고, 매뉴얼에서도 DUMP 상황에서 현장 방송을 권장합니다.
     야간 시간대(22시~02시)에 집중 발생하므로 즉각 대응이 필요합니다.
@@ -380,6 +389,10 @@ def create_agent_node(config: Config, tools: list):
     ### 과거 사례 분석
     - 유사 사례: 0건 (과거 사례 없음)
     - 참고: 대응 매뉴얼 기준으로 판단
+    
+    ### 법적 근거
+    - 관련 법령: 폐기물관리법 제8조 (폐기물의 투기 금지)
+    - 적용 사유: 지정된 장소가 아닌 곳에 폐기물 투기 행위 확인
     
     ### 판단 근거
     과거 유사 사례가 없어 대응 매뉴얼을 기준으로 판단합니다.
@@ -946,17 +959,17 @@ def generate_report_node(state: ResponseAgentState, app_config: Config) -> Dict[
     # 마크다운 보고서 내용 생성
     content = f"""# 이상 상황 대응 보고서
 
-## 1. 개요
-- **발생 일시**: {occurred_at}
-- **위치**: {camera_name} ({camera_location})
-- **이벤트 유형**: {event_type}
-- **위험도**: {risk_level} (점수: {risk_score_str})
-
-## 2. 상황 요약
-{summary}
-
-## 3. 대응 조치
-"""
+    ## 1. 개요
+    - **발생 일시**: {occurred_at}
+    - **위치**: {camera_name} ({camera_location})
+    - **이벤트 유형**: {event_type}
+    - **위험도**: {risk_level} (점수: {risk_score_str})
+    
+    ## 2. 상황 요약
+    {summary}
+    
+    ## 3. 대응 조치
+    """
 
     if actions:
         for i, action in enumerate(actions, 1):
@@ -965,10 +978,10 @@ def generate_report_node(state: ResponseAgentState, app_config: Config) -> Dict[
         content += "- 결정된 조치 없음\n"
 
     content += f"""
-## 4. 비고
-- 보고서 생성 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- 담당 시스템: AEGIS AI Agent
-"""
+    ## 4. 비고
+    - 보고서 생성 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    - 담당 시스템: AEGIS AI Agent
+    """
 
     # 보고서 파일 URL (업로드 후 채워짐)
     file_urls = {"pdf": None, "docx": None, "pptx": None, "hwp": None}
