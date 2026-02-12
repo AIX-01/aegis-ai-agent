@@ -1,61 +1,114 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8">
-    <style>
-        body { font-family: 'Pretendard', sans-serif; line-height: 1.6; color: #333; padding: 40px; }
-        .header { display: flex; justify-content: space-between; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 30px; }
-        .logo { font-weight: bold; font-size: 1.2rem; color: #1a2a6c; }
-
-        .risk-badge { padding: 5px 15px; border-radius: 4px; color: white; font-weight: bold; }
-        .ABNORMAL { background-color: #d9534f; }
-
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-        th { background-color: #f8f9fa; width: 20%; }
-
-        .section-title { font-size: 1.3rem; margin-top: 30px; border-left: 5px solid #1a2a6c; padding-left: 10px; }
-        .footer { margin-top: 50px; font-size: 0.9rem; color: #777; text-align: right; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>이벤트 보고서 - {{event_id}}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Malgun Gothic', Arial, sans-serif; background: white; padding: 20px; color: #1f2937; }
+    .container { max-width: 700px; margin: 0 auto; }
+    .header { background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; padding: 24px; border-radius: 8px 8px 0 0; }
+    .header h1 { font-size: 20px; margin-bottom: 6px; }
+    .header p { opacity: 0.9; font-size: 12px; }
+    .content { padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 8px 8px; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 10px; padding-left: 10px; border-left: 3px solid #3b82f6; }
+    .section-title.green { border-left-color: #10b981; }
+    .section-title.orange { border-left-color: #f59e0b; }
+    .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .info-item { background: #f9fafb; padding: 10px; border-radius: 6px; }
+    .info-label { font-size: 11px; color: #6b7280; margin-bottom: 3px; }
+    .info-value { font-size: 13px; font-weight: 500; color: #111827; }
+    .summary-box { background: #f0fdf4; border-left: 3px solid #10b981; padding: 12px; border-radius: 0 6px 6px 0; }
+    .summary-box p { color: #166534; font-size: 13px; line-height: 1.6; }
+    .action-item { background: #fffbeb; border-left: 3px solid #f59e0b; padding: 10px 12px; margin-bottom: 6px; border-radius: 0 6px 6px 0; }
+    .action-step { font-weight: 600; color: #92400e; margin-bottom: 3px; font-size: 13px; }
+    .action-desc { font-size: 12px; color: #78350f; line-height: 1.5; }
+    .action-header { font-weight: 600; color: #92400e; margin-bottom: 3px; font-size: 13px; }
+    .action-content { font-size: 12px; color: #78350f; line-height: 1.5; }
+    .actions-list { margin-top: 8px; }
+    .no-actions { color: #6b7280; text-align: center; padding: 16px; font-size: 12px; background: #f9fafb; border-radius: 4px; }
+    .risk-high { color: #dc2626; }
+    .risk-warning { color: #d97706; }
+    .no-data { color: #6b7280; text-align: center; padding: 16px; font-size: 12px; }
+    .frames-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
+    .frame-item { background: #f9fafb; border-radius: 6px; overflow: hidden; text-align: center; }
+    .frame-item img { width: 100%; height: auto; display: block; }
+    .frame-label { font-size: 10px; color: #6b7280; padding: 4px 0; }
+    .no-frames { color: #9ca3af; text-align: center; padding: 20px; font-size: 11px; background: #f9fafb; border-radius: 4px; }
+    .footer { margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 11px; color: #9ca3af; }
+  </style>
 </head>
 <body>
+  <div class="container">
     <div class="header">
-        <div class="logo">AEGIS AI AGENT</div>
-        <div>CCTV 이상 상황 대응 보고서</div>
+      <h1>AEGIS 이벤트 분석 보고서</h1>
+      <p>생성일시: {{generated_at}}</p>
     </div>
+    <div class="content">
+      <div class="section">
+        <h2 class="section-title">기본 정보</h2>
+        <div class="info-grid">
+          <div class="info-item">
+            <div class="info-label">이벤트 ID</div>
+            <div class="info-value" style="font-size: 11px;">{{event_id}}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">발생 시각</div>
+            <div class="info-value">{{occurred_at}}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">카메라</div>
+            <div class="info-value">{{camera_name}}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">위치</div>
+            <div class="info-value">{{camera_location}}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">위험도</div>
+            <div class="info-value {{risk_class}}">{{risk_text}}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">이벤트 유형</div>
+            <div class="info-value">{{event_type_korean}}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">위험도 점수</div>
+            <div class="info-value {{risk_class}}">{{risk_score_percent}}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">분석 상태</div>
+            <div class="info-value">{{status_text}}</div>
+          </div>
+        </div>
+      </div>
 
-    <h2 class="section-title">1. 사건 개요</h2>
-    <table>
-        <tr>
-            <th>발생 일시</th><td>{{occurred_at}}</td>
-            <th>이벤트 유형</th><td>{{event_type}}</td>
-        </tr>
-        <tr>
-            <th>카메라 위치</th><td>{{camera_location}} ({{camera_name}})</td>
-            <th>위험도</th>
-            <td><span class="risk-badge {{risk_level}}">{{risk_level}}</span> ({{risk_score}}점)</td>
-        </tr>
-    </table>
+      <div class="section">
+        <h2 class="section-title green">AI 분석 요약</h2>
+        <div class="summary-box">
+          <p>{{summary}}</p>
+        </div>
+      </div>
 
-    <h2 class="section-title">2. 상황 요약</h2>
-    <div style="background: #fdfdfd; padding: 15px; border: 1px solid #eee;">
-        {{summary}}
-    </div>
-
-    <h2 class="section-title">3. 캡처 프레임</h2>
-    <div style="background: #fdfdfd; padding: 15px; border: 1px solid #eee;">
+      <div class="section">
+        <h2 class="section-title">시간 별 상황</h2>
         {{frames}}
-    </div>
+      </div>
 
-    <h2 class="section-title">4. 대응 조치</h2>
-    <ul>
-        {{actions}}
-    </ul>
+      <div class="section">
+        <h2 class="section-title orange">권장 대응 절차</h2>
+        <div class="actions-list">
+          {{actions}}
+        </div>
+      </div>
 
-    <div class="footer">
-        보고서 생성 시각: {{generated_at}}<br>
-        본 보고서는 AEGIS AI Agent에 의해 자동 생성되었습니다.
+      <div class="footer">
+        <p>AEGIS AI 관제 시스템 | 본 보고서는 AI에 의해 자동 생성되었습니다.</p>
+        <p>버전: {{version}}</p>
+      </div>
     </div>
+  </div>
 </body>
 </html>
-
