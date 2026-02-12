@@ -70,8 +70,22 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
         # =========================================
         # 임베딩용 텍스트 구성
         # =========================================
-        # 이 텍스트가 OpenAI Embedding API를 통해 1536차원 벡터로 변환되어
-        # Qdrant의 'vector' 필드에 저장됩니다.
+        # [핵심 개념]
+        # 모든 데이터를 임베딩하지 않고, 검색에 필요한 핵심 데이터만 선별하여
+        # 하나의 텍스트(text_to_embed)로 구성합니다.
+        # 이 텍스트만 OpenAI Embedding API를 통해 벡터로 변환됩니다.
+        #
+        # [선별 기준]
+        # - 유사도 검색에 영향을 주어야 하는 필드만 포함
+        # - summary: 상황 설명 (가장 중요)
+        # - camera_name, camera_location: 위치 정보
+        # - event_type: 이벤트 유형
+        #
+        # [제외된 데이터]
+        # - event_id, camera_uuid: 식별자 (검색 의미 없음)
+        # - risk_score, risk_level: 숫자/코드값 (필터링으로 처리)
+        # - occurred_at: 시간 (필터링으로 처리)
+        # - actions: 대응 조치 (payload에만 저장, 결과 표시용)
         #
         # [임베딩 흐름]
         # text_to_embed (문자열)

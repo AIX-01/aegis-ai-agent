@@ -76,7 +76,6 @@ src/
 │
 └── tools/                      # LangChain 도구 및 유틸리티
     ├── __init__.py
-    ├── embedding_tools.py      # 임베딩 도구 (텍스트→벡터 변환)
     ├── manual_templates.py     # 대응 매뉴얼 템플릿 (이벤트 유형별)
     ├── search_tools.py         # 매뉴얼/사례 검색 (VectorStoreClient 사용)
     └── response_tools.py       # 대응 도구 (execute_field_action, emergency_call)
@@ -469,11 +468,19 @@ LangGraph 워크플로우를 빌드합니다.
     ↓
 store_embedding 노드
     ↓
-임베딩 대상 텍스트 구성:
-    "카메라: {camera_name} ({camera_location})
-     발생시각: {occurred_at}
-     이벤트유형: {event_type}
-     상황: {summary}"
+임베딩 대상 텍스트 구성 (핵심 데이터만 선별):
+    "상황: {summary} | 위치: {camera_name} {camera_location} | 유형: {event_type}"
+    
+    ※ 선별 기준:
+    - summary: 상황 설명 (가장 중요, 맨 앞 배치)
+    - camera_name, camera_location: 위치 정보
+    - event_type: 이벤트 유형
+    
+    ※ 제외 (payload에만 저장):
+    - event_id, camera_uuid: 식별자
+    - risk_score, risk_level: 필터링으로 처리
+    - occurred_at: 필터링으로 처리
+    - actions: 결과 표시용
     ↓
 OpenAI Embedding API 호출 → 벡터 변환
     ↓
@@ -494,6 +501,10 @@ Qdrant (past_cases 컬렉션) 저장
 | `summary` | 상황 요약 |
 | `occurred_at` | 발생 시각 |
 | `text_embedded` | 임베딩된 원본 텍스트 |
+| `actions` | 대응 조치 리스트 (2026-02-12 추가) |
+
+> **참고 (2026-02-12):** `actions` 필드가 추가되어 과거 대응 조치를 검색 결과에서 참조할 수 있습니다.
+> 형식: `[{"action": str, "description": str, "user_id": str | None}, ...]`
 
 #### 검색 흐름 (search_knowledge 노드)
 
@@ -563,6 +574,28 @@ response_agent에서 사용하는 LangChain Tool들을 정의합니다.
 
 > **참고**: `search_protocol_and_cases`는 `search_knowledge` 노드로 분리되어 
 > ReAct 루프 진입 전에 무조건 실행됩니다. (2026-02-11 변경)
+
+**LLM 대응 기준 (시스템 프롬프트):**
+
+| 이벤트 유형 | 대응 기준 |
+|------------|----------|
+| SWOON (실신) | 즉시 119 신고, 현장 방송으로 주변에 알림 |
+| ASSAULT (폭행) | 112 신고 + 보안팀 출동, 현장 방송/사이렌 |
+| BURGLARY (절도) | 112 신고 + 보안팀 출동, PTZ 추적 |
+| VANDALISM (기물파손) | 보안팀 출동, 현장 방송 |
+| DUMP (무단투기) | 현장 방송으로 경고, 기록 보존 |
+
+**복합 상황 대응 (LLM 판단) - 2026-02-12 추가:**
+
+LLM은 이벤트 유형만 보지 않고, `summary`의 세부 내용을 분석하여 복합적인 대응을 판단합니다:
+
+| 복합 상황 | 대응 |
+|----------|------|
+| 폭행(ASSAULT) 중 부상자/실신자 발생 | 112 + 119 동시 신고 |
+| 절도(BURGLARY) 중 폭행 발생 | 112 신고 + PTZ 추적 + 현장 방송 |
+| 기물파손(VANDALISM) 중 부상자 발생 | 112 + 119 동시 신고 |
+
+> **핵심**: 인명 피해 가능성이 있으면 119를 반드시 포함합니다.
 
 **사용 예시:**
 ```python
@@ -741,15 +774,11 @@ Response Body:
 
 ---
 
-#### tools/embedding_tools.py - 임베딩 도구
+#### ~~tools/embedding_tools.py~~ - 삭제됨 (2026-02-12)
 
-OpenAI Embedding API를 사용하여 텍스트를 벡터로 변환합니다.
-
-| 함수 | 설명 |
-|------|------|
-| `get_text_embedding(text, config)` | 단일 텍스트 → 벡터 변환 |
-| `get_batch_embeddings(texts, config)` | 배치 텍스트 → 벡터 리스트 변환 |
-| `calculate_similarity(vec1, vec2)` | 두 벡터 간 코사인 유사도 계산 |
+> **삭제 사유**: 임베딩 처리는 `VectorStoreClient` 내부에서 자체적으로 수행됩니다.
+> `search_knowledge` 노드와 `store_embedding` 노드 모두 `VectorStoreClient`를 직접 사용하므로
+> 별도의 임베딩 유틸리티 함수가 필요하지 않습니다.
 
 #### tools/search_tools.py - 검색 도구
 
@@ -1288,6 +1317,54 @@ graph TD
 **변경된 파일:**
 - `src/graph/subgraphs/response_agent.py`: `search_knowledge_node()` 추가, 워크플로우 수정
 - `src/tools/response_tools.py`: `search_protocol_and_cases` 도구 제거
+
+---
+
+### 2026-02-12
+
+**미사용 embedding_tools.py 삭제**
+
+- `src/tools/embedding_tools.py` 파일 삭제
+- 삭제된 함수: `get_text_embedding`, `get_batch_embeddings`, `calculate_similarity`
+- 삭제 사유:
+  - `search_protocol_and_cases` 도구가 `search_knowledge` 노드로 분리되면서 미사용
+  - 임베딩 처리는 `VectorStoreClient` 내부에서 자체 수행
+  - `VectorStoreClient._embed()` → `openai_client.get_embedding()` 방식 사용
+
+**변경된 파일:**
+- `src/tools/embedding_tools.py`: 삭제
+- `src/tools/__init__.py`: import/export 제거
+
+---
+
+**store_embedding 노드 주석 보강**
+
+- 임베딩 텍스트 구성 시 "핵심 데이터만 선별"한다는 내용 명시
+- 선별 기준 및 제외 데이터 목록 추가
+
+**변경된 파일:**
+- `src/graph/nodes/store_embedding.py`: 주석 보강
+
+---
+
+**actions 필드 임베딩 저장 확인**
+
+- `store_embedding` 노드에서 `actions` 필드가 이미 저장되고 있음 확인
+- 과거 대응 조치를 검색 결과에서 참조 가능
+- 형식: `[{"action": str, "description": str, "user_id": str | None}, ...]`
+
+---
+
+**복합 상황 대응 가이드 추가 (시스템 프롬프트)**
+
+- LLM이 `summary`를 분석하여 복합적인 대응을 판단하도록 가이드 추가
+- 추가된 복합 상황:
+  - 폭행(ASSAULT) 중 부상자/실신자 발생: 112 + 119 동시 신고
+  - 절도(BURGLARY) 중 폭행 발생: 112 신고 + PTZ 추적 + 현장 방송
+  - 기물파손(VANDALISM) 중 부상자 발생: 112 + 119 동시 신고
+
+**변경된 파일:**
+- `src/graph/subgraphs/response_agent.py`: 시스템 프롬프트에 복합 상황 대응 가이드 추가
 
 
 
