@@ -224,7 +224,7 @@ def skip_emergency_call_node(state: "ResponseAgentState") -> Dict[str, Any]:
                 # execute_field_action_impl: response_tools.py에서 분리된 실제 구현
                 # 분리 이유: @tool 데코레이터 함수는 직접 호출이 어려움
                 # emergency_call 거부 시에도 execute_field_action은 정상 실행되어야 함
-                from src.tools.response_tools import execute_field_action_impl
+                from ....tools.response_tools import execute_field_action_impl
 
                 action_name = tool_args.get("action_name", tool_args.get("action", "UNKNOWN"))
                 message_content = tool_args.get("message_content", tool_args.get("message", ""))

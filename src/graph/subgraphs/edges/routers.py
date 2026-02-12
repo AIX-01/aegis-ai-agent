@@ -6,15 +6,17 @@
 - approval_router: check_approval 노드 후 분기 결정
 """
 import logging
-from typing import Literal, TYPE_CHECKING
+from typing import Literal
 
-if TYPE_CHECKING:
-    from ..state import ResponseAgentState
+# [중요] LangGraph가 add_conditional_edges()에서 get_type_hints()를 호출하여
+# 라우터 함수의 타입 힌트를 평가합니다. TYPE_CHECKING 블록 안에서만 import하면
+# 런타임에 NameError가 발생하므로, 반드시 런타임에도 import해야 합니다.
+from ..state import ResponseAgentState
 
 logger = logging.getLogger(__name__)
 
 
-def should_continue(state: "ResponseAgentState") -> Literal["tools", "check_approval", "report", "end"]:
+def should_continue(state: ResponseAgentState) -> Literal["tools", "check_approval", "report", "end"]:
     """
     에이전트가 다음에 어디로 갈지 결정합니다.
 
@@ -58,7 +60,7 @@ def should_continue(state: "ResponseAgentState") -> Literal["tools", "check_appr
     return "report"
 
 
-def approval_router(state: "ResponseAgentState") -> Literal["tools", "skip_emergency"]:
+def approval_router(state: ResponseAgentState) -> Literal["tools", "skip_emergency"]:
     """
     승인 결과에 따라 다음 노드를 결정합니다.
 
