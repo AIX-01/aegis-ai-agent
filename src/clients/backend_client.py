@@ -102,11 +102,11 @@ class BackendClient:
         detail_result: Dict[str, Any]
     ) -> bool:
         """
-        2차 분석(LLM) 결과로 기존 이벤트를 갱신합니다.
+        2차 분석 완료 후 이벤트를 갱신합니다.
 
         Args:
             event_id: 갱신할 이벤트 ID
-            detail_result: 상세 분석 결과 (risk, type, summary, risk_score, report, actions 등)
+            detail_result: 상세 분석 결과 (report, actions 등)
 
         Returns:
             성공 여부
@@ -114,33 +114,27 @@ class BackendClient:
         # 갱신용 엔드포인트 템플릿에 event_id 적용
         update_endpoint = self.update_endpoint_template.format(event_id=event_id)
         
-        risk_score = detail_result.get("risk_score")
-        
-        payload = {
-            "risk": detail_result.get("risk"),
-            "type": detail_result.get("type"),
-            "summary": detail_result.get("summary"),
-            "riskScore": f"{risk_score:.2f}" if isinstance(risk_score, float) else str(risk_score) if risk_score is not None else None,
-            "report": detail_result.get("report"),   # 보고서 Dict 추가
-            "actions": detail_result.get("actions"), # 대응 조치 리스트 추가
-        }
-        final_payload = {k: v for k, v in payload.items() if v is not None}
+        # 보고서 content를 문자열로 추출
+        report_dict = detail_result.get("report", {})
+        report_content = report_dict.get("content", "") if isinstance(report_dict, dict) else str(report_dict)
 
-        if not final_payload:
-            self.logger.warning(f"백엔드로 갱신할 데이터가 없습니다. (Event ID: {event_id})")
-            return True
+        # 백엔드 API 스펙에 맞게 payload 구성
+        payload = {
+            "report": report_content,
+            "status": "analyzed"
+        }
 
         for attempt in range(self.max_retries):
             try:
-                response = requests.patch( # PUT -> PATCH 로 변경
+                response = requests.patch(
                     update_endpoint,
-                    json=final_payload,
+                    json=payload,
                     timeout=self.timeout,
                     headers={"Content-Type": "application/json"},
                 )
                 response.raise_for_status()
                 
-                self.logger.info(f"[백엔드 갱신 성공] Event ID: {event_id}")
+                self.logger.info(f"✅ [백엔드 갱신 성공] Event ID: {event_id}")
                 return True
 
             except Exception as e:
