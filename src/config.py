@@ -32,12 +32,23 @@ class Config:
     
     # 1차 분석 후 '이상' 또는 '의심'일 때, 새로운 이벤트를 생성(CREATE)하기 위해 사용
     _real_backend_create_endpoint: str = "http://localhost:8080/internal/agent/events"
-    # 2차 정밀 분석이 끝난 후 또는 '의심' 상태를 최종 기록할 때, 기존 이벤트의 내용을 갱신(UPDATE)하기 위해 사용
+
+    # 이벤트 갱신 (PATCH) - 2차 분석 결과, 보고서, 상태 등을 업데이트
+    # Request Body: { risk, type, summary, report, status } (모두 optional, 업데이트할 값만 전달)
     _real_backend_update_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}"
+
     # 생성된 영상 클립의 경로를 백엔드에 업데이트(CLIP UPDATE)하기 위해 사용
     _real_backend_clip_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/clip"
-    # 생성된 보고서의 경로를 백엔드에 업데이트(REPORT UPDATE)하기 위해 사용
-    _real_backend_report_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/report"
+
+    # =========================================
+    # Human-in-the-Loop (HITL) API 엔드포인트
+    # =========================================
+    # Action 생성 (POST) - emergency_call 도구 호출 시 액션 생성
+    _real_backend_action_create_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/actions"
+    # Action 승인 확인 (POST) - 사용자 승인/거절 결과 대기
+    _real_backend_action_confirm_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/actions/{action_id}/pending"
+    # Action 갱신 (PATCH) - 도구 실행 완료 후 최종 결과 업데이트
+    _real_backend_action_update_endpoint: str = "http://localhost:8080/internal/agent/events/{event_id}/actions/{action_id}"
 
     # ===================================================================
     # >> 2. 모드 설정 (컴포넌트별 True/False로 전환)
@@ -58,9 +69,13 @@ class Config:
     vlm_model_id: str = field(init=False, default="vlm")
     precision_endpoint: str = field(init=False)
     backend_create_endpoint: str = field(init=False)
-    backend_update_endpoint: str = field(init=False)
+    backend_update_endpoint: str = field(init=False)  # 이벤트 갱신 (분석 결과, 보고서, 상태 통합)
     backend_clip_endpoint: str = field(init=False)
-    backend_report_endpoint: str = field(init=False)  # 보고서 업로드용
+
+    # Human-in-the-Loop (HITL) 엔드포인트
+    backend_action_create_endpoint: str = field(init=False)   # Action 생성
+    backend_action_confirm_endpoint: str = field(init=False)  # Action 승인 확인
+    backend_action_update_endpoint: str = field(init=False)   # Action 갱신
 
     # =========================================
     # 에이전트 API 서버 설정 (FastAPI)
@@ -308,25 +323,32 @@ class Config:
         else:
             self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
 
-        # 백엔드 엔드포인트 설정 (생성/갱신/클립/보고서 분리)
+        # 백엔드 엔드포인트 설정 (생성/갱신/클립 분리, 갱신 엔드포인트가 분석+보고서+상태 통합)
         if self.real_backend:
             # 전체 실제 서버 사용
             self.backend_create_endpoint = self._real_backend_create_endpoint
             self.backend_update_endpoint = self._real_backend_update_endpoint
             self.backend_clip_endpoint = self._real_backend_clip_endpoint
-            self.backend_report_endpoint = self._real_backend_report_endpoint
+            # HITL 엔드포인트도 실제 서버 사용
+            self.backend_action_create_endpoint = self._real_backend_action_create_endpoint
+            self.backend_action_confirm_endpoint = self._real_backend_action_confirm_endpoint
+            self.backend_action_update_endpoint = self._real_backend_action_update_endpoint
         elif self.real_backend_events_only:
-            # 1차/2차 갱신 + 클립은 실제 서버, 보고서만 Mock
+            # 이벤트 관련 API만 실제 서버, 나머지는 Mock
             self.backend_create_endpoint = self._real_backend_create_endpoint
             self.backend_update_endpoint = self._real_backend_update_endpoint
             self.backend_clip_endpoint = self._real_backend_clip_endpoint
-            # 보고서만 Mock 서버
-            base_url = f"http://localhost:{self.mock_backend_port}/api/vlm-results"
-            self.backend_report_endpoint = f"{base_url}/{{event_id}}/report"
+            # HITL 엔드포인트는 실제 서버 사용
+            self.backend_action_create_endpoint = self._real_backend_action_create_endpoint
+            self.backend_action_confirm_endpoint = self._real_backend_action_confirm_endpoint
+            self.backend_action_update_endpoint = self._real_backend_action_update_endpoint
         else:
             # Mock 서버는 RESTful 규칙을 따르므로 기본 경로 설정
             base_url = f"http://localhost:{self.mock_backend_port}/api/vlm-results"
             self.backend_create_endpoint = base_url
-            self.backend_update_endpoint = f"{base_url}/{{event_id}}"
+            self.backend_update_endpoint = f"{base_url}/{{event_id}}"  # 통합된 갱신 엔드포인트
             self.backend_clip_endpoint = f"{base_url}/{{event_id}}/clip"
-            self.backend_report_endpoint = f"{base_url}/{{event_id}}/report"
+            # HITL 엔드포인트도 Mock 서버 경로 설정
+            self.backend_action_create_endpoint = f"{base_url}/{{event_id}}/actions"
+            self.backend_action_confirm_endpoint = f"{base_url}/{{event_id}}/actions/{{action_id}}/pending"
+            self.backend_action_update_endpoint = f"{base_url}/{{event_id}}/actions/{{action_id}}"

@@ -23,15 +23,41 @@ class BackendClient:
         self.config = config
         self.logger = logging.getLogger("aegis-agent.backend")
 
-        # 엔드포인트 분리
+        # 엔드포인트 분리 (생성/갱신/클립)
+        # 갱신 엔드포인트가 분석 결과 + 보고서 + 상태를 통합 처리
         self.create_endpoint = config.backend_create_endpoint
-        self.update_endpoint_template = config.backend_update_endpoint
-        self.clip_endpoint_template = config.backend_clip_endpoint # 추가됨
-        self.report_endpoint_template = config.backend_report_endpoint # 추가됨
+        self.update_endpoint_template = config.backend_update_endpoint  # 통합 갱신 엔드포인트
+        self.clip_endpoint_template = config.backend_clip_endpoint
+
+        # Human-in-the-Loop (HITL) 엔드포인트 템플릿 (config에서 관리)
+        self.action_create_endpoint_template = config.backend_action_create_endpoint
+        self.action_confirm_endpoint_template = config.backend_action_confirm_endpoint
+        self.action_update_endpoint_template = config.backend_action_update_endpoint
+
+        # base_url 추출 (create_endpoint에서 /internal 이전까지)
+        # 예: "http://localhost:8080/internal/agent/events" → "http://localhost:8080"
+        self.base_url = self._extract_base_url(self.create_endpoint)
 
         self.timeout = config.backend_timeout
         self.max_retries = config.backend_max_retries
         self.retry_delay = config.backend_retry_delay
+
+    def _extract_base_url(self, endpoint: str) -> str:
+        """
+        엔드포인트에서 base_url을 추출합니다.
+
+        예: "http://localhost:8080/internal/agent/events" → "http://localhost:8080"
+
+        Args:
+            endpoint: 전체 엔드포인트 URL
+
+        Returns:
+            base_url (스키마 + 호스트 + 포트)
+        """
+        from urllib.parse import urlparse
+
+        parsed = urlparse(endpoint)
+        return f"{parsed.scheme}://{parsed.netloc}"
 
     def send_vlm_result(
         self,
@@ -102,11 +128,33 @@ class BackendClient:
         detail_result: Dict[str, Any]
     ) -> bool:
         """
-        2차 분석 완료 후 이벤트를 갱신합니다.
+        기존 이벤트를 갱신합니다. (분석 결과, 보고서, 상태 통합)
+
+        [API 엔드포인트]
+        PATCH /internal/agent/events/{eventId}
+
+        [Request Body] - 업데이트할 값만 전달
+        {
+            "risk": "normal | suspicious | abnormal", (optional)
+            "type": "assault | burglary | dump | swoon | vandalism", (optional)
+            "summary": "AI 분석 요약", (optional)
+            "report": "상세 보고서 내용", (optional)
+            "status": "processing | analyzed" (optional)
+        }
+
+        [Response Body]
+        {
+            "eventId": "uuid"
+        }
 
         Args:
             event_id: 갱신할 이벤트 ID
-            detail_result: 상세 분석 결과 (report, actions 등)
+            detail_result: 갱신할 데이터 딕셔너리
+                - risk: 위험도 (normal/suspicious/abnormal)
+                - type: 이벤트 유형 (assault/burglary/dump/swoon/vandalism)
+                - summary: AI 분석 요약
+                - report: 상세 보고서 내용
+                - status: 상태 (processing/analyzed)
 
         Returns:
             성공 여부
@@ -114,15 +162,32 @@ class BackendClient:
         # 갱신용 엔드포인트 템플릿에 event_id 적용
         update_endpoint = self.update_endpoint_template.format(event_id=event_id)
         
-        # 보고서 content를 문자열로 추출
-        report_dict = detail_result.get("report", {})
-        report_content = report_dict.get("content", "") if isinstance(report_dict, dict) else str(report_dict)
+        # 새로운 API 스펙에 맞게 payload 구성 (업데이트할 값만 포함)
+        payload = {}
 
-        # 백엔드 API 스펙에 맞게 payload 구성
-        payload = {
-            "report": report_content,
-            "status": "analyzed"
-        }
+        # risk (위험도)
+        if "risk" in detail_result and detail_result["risk"] is not None:
+            payload["risk"] = detail_result["risk"].lower()
+
+        # type (이벤트 유형)
+        if "type" in detail_result and detail_result["type"] is not None:
+            payload["type"] = detail_result["type"].lower()
+
+        # summary (AI 분석 요약)
+        if "summary" in detail_result and detail_result["summary"] is not None:
+            payload["summary"] = detail_result["summary"]
+
+        # report (상세 보고서 내용)
+        if "report" in detail_result and detail_result["report"] is not None:
+            payload["report"] = detail_result["report"]
+
+        # status (상태)
+        if "status" in detail_result and detail_result["status"] is not None:
+            payload["status"] = detail_result["status"]
+
+        if not payload:
+            self.logger.warning(f"백엔드로 갱신할 데이터가 없습니다. (Event ID: {event_id})")
+            return True
 
         for attempt in range(self.max_retries):
             try:
@@ -134,7 +199,7 @@ class BackendClient:
                 )
                 response.raise_for_status()
                 
-                self.logger.info(f"✅ [백엔드 갱신 성공] Event ID: {event_id}")
+                self.logger.info(f"[백엔드 갱신 성공] Event ID: {event_id}, 갱신 필드: {list(payload.keys())}")
                 return True
 
             except Exception as e:
@@ -226,111 +291,243 @@ class BackendClient:
 
         return False
 
+
     # =========================================
-    # 보고서 업로드 관련 메서드
+    # Human-in-the-Loop 승인 관련 API
     # =========================================
-    def get_report_upload_url(self, event_id: str, report_format: str) -> Optional[Dict[str, str]]:
+    #
+    # [HITL 흐름]
+    # 1. create_action(): Action 생성 → actionId 획득
+    #    POST /internal/agent/events/{eventId}/actions
+    #    Request:  { action, description }
+    #    Response: { actionId }
+    #
+    # 2. confirm_action(): 승인 결과 대기 및 조회
+    #    POST /internal/agent/events/{eventId}/actions/{actionId}/pending
+    #    Request:  (없음)
+    #    Response: { userId, userName, userMail, result }
+    #
+    # [액션 코드]
+    # - 112_POLICE: 경찰 신고
+    # - 119_FIRE: 소방/응급 신고
+    # - SECURITY_TEAM: 내부 보안팀 호출
+    # - MANAGEMENT: 관리사무소 연락
+    # =========================================
+    def create_action(
+        self,
+        event_id: str,
+        action: str,
+        description: str,
+    ) -> Optional[str]:
         """
-        보고서 업로드용 presigned URL 요청
-        POST /internal/agent/events/{event_id}/report
+        Action을 생성하고 actionId를 받습니다.
+
+        [API 엔드포인트]
+        POST /internal/agent/events/{eventId}/actions
+
+        [Request Body]
+        {
+            "action": "112_POLICE",      # 액션 코드
+            "description": "긴급 신고 요청..."  # 설명
+        }
+
+        [Response Body]
+        {
+            "actionId": "uuid"           # 생성된 action ID
+        }
 
         Args:
             event_id: 이벤트 ID
-            report_format: 보고서 포맷 (pdf, docx, pptx, hwp)
+            action: 액션 코드 (예: "112_POLICE", "119_FIRE")
+            description: 액션 설명
 
         Returns:
-            {"upload_url": presigned URL, "report_path": 저장 경로} 또는 None
+            생성된 actionId 또는 None (실패 시)
         """
-        endpoint = self.report_endpoint_template.format(event_id=event_id)
+        # config에서 관리되는 엔드포인트 템플릿 사용
+        endpoint = self.action_create_endpoint_template.format(event_id=event_id)
+
+        payload = {
+            "action": action,
+            "description": description,
+        }
 
         try:
+            self.logger.info(f"[HITL] Action 생성 요청: {event_id} - {action}")
+
             response = requests.post(
                 endpoint,
-                json={"format": report_format},
+                json=payload,
                 timeout=self.timeout,
                 headers={"Content-Type": "application/json"},
             )
             response.raise_for_status()
 
             data = response.json()
-            upload_url = data.get("upload_url") or data.get("uploadUrl")
-            report_path = data.get("report_path") or data.get("reportPath")
+            action_id = data.get("actionId")
 
-            self.logger.debug(f"[보고서 업로드 URL 획득] Event ID: {event_id}, Format: {report_format}")
-            return {"upload_url": upload_url, "report_path": report_path}
+            self.logger.info(f"[HITL] Action 생성 완료: {event_id} - actionId={action_id}")
+            return action_id
 
-        except Exception as e:
-            self.logger.error(f"❌ [보고서 업로드 URL 요청 실패] {event_id}: {e}")
+        except Timeout:
+            self.logger.warning(f"⏱️ [HITL] Action 생성 타임아웃: {event_id}")
             return None
 
-    def upload_report(self, upload_url: str, file_data: bytes, content_type: str) -> bool:
-        """
-        presigned URL로 보고서 직접 업로드 (S3/MinIO 또는 Mock 로컬)
-
-        Args:
-            upload_url: presigned PUT URL
-            file_data: 보고서 바이너리 데이터
-            content_type: MIME 타입 (예: application/pdf)
-
-        Returns:
-            성공 여부
-        """
-        try:
-            response = requests.put(
-                upload_url,
-                data=file_data,
-                headers={"Content-Type": content_type},
-                timeout=60
-            )
-            response.raise_for_status()
-
-            self.logger.info(f"✅ [보고서 업로드 성공] {len(file_data)} bytes")
-            return True
+        except RequestException as e:
+            self.logger.error(f"❌ [HITL] Action 생성 실패: {event_id} - {e}")
+            return None
 
         except Exception as e:
-            self.logger.error(f"❌ [보고서 업로드 실패]: {e}")
-            return False
+            self.logger.error(f"💥 [HITL] Action 생성 예외: {event_id} - {e}", exc_info=True)
+            return None
 
-    def upload_all_reports(self, event_id: str, reports: Dict[str, bytes]) -> Dict[str, Optional[str]]:
+    def confirm_action(
+        self,
+        event_id: str,
+        action_id: str,
+        timeout: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
-        모든 포맷의 보고서를 업로드하고 경로 반환
+        Action에 대한 Human-in-the-Loop 승인 결과를 조회합니다.
+
+        백엔드에서 사용자 승인/거절이 완료될 때까지 대기하고,
+        결과를 반환합니다.
+
+        [API 엔드포인트]
+        POST /internal/agent/events/{eventId}/actions/{actionId}/pending
+
+        [Request Body]
+        (없음)
+
+        [Response Body]
+        {
+            "userId": "uuid",        # 승인/거절한 사용자 ID
+            "userName": "홍길동",     # 사용자 이름
+            "userMail": "a@b.com",   # 사용자 이메일
+            "result": true/false     # 승인 여부
+        }
 
         Args:
             event_id: 이벤트 ID
-            reports: {"pdf": bytes, "docx": bytes, ...}
+            action_id: 승인 요청할 action ID
+            timeout: 요청 타임아웃 (초, None이면 기본값 사용)
 
         Returns:
-            {"pdf": "path", "docx": "path", ...}
+            백엔드 응답 딕셔너리 또는 None (실패 시)
         """
-        content_types = {
-            "pdf": "application/pdf",
-            "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "hwp": "application/x-hwp"
+        # config에서 관리되는 엔드포인트 템플릿 사용
+        endpoint = self.action_confirm_endpoint_template.format(
+            event_id=event_id, action_id=action_id
+        )
+
+        # HITL 승인은 사용자 응답을 기다려야 하므로 타임아웃을 길게 설정
+        # 기본값: 없음 (무한 대기) 또는 설정된 값 사용
+        request_timeout = timeout if timeout else None  # None = 무한 대기
+
+        try:
+            self.logger.info(f"[HITL] 승인 확인 요청: {event_id} - actionId={action_id}")
+
+            response = requests.post(
+                endpoint,
+                timeout=request_timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            self.logger.info(f"[HITL] 승인 확인 응답: {event_id} - result={data.get('result')}")
+
+            return data
+
+        except Timeout:
+            self.logger.warning(f"⏱️ [HITL] 승인 확인 타임아웃: {event_id}")
+            return None
+
+        except RequestException as e:
+            self.logger.error(f"❌ [HITL] 승인 확인 실패: {event_id} - {e}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"💥 [HITL] 승인 확인 예외: {event_id} - {e}", exc_info=True)
+            return None
+
+    def update_action(
+        self,
+        event_id: str,
+        action_id: str,
+        action: str,
+        description: str,
+        user_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Action 정보를 백엔드에 갱신합니다.
+
+        도구 실행이 완료된 후, 최종 결과를 백엔드에 업데이트합니다.
+        emergency_call 도구 실행 후 호출됩니다.
+
+        [API 엔드포인트]
+        PATCH /internal/agent/events/{eventId}/actions/{actionId}
+
+        [Request Body]
+        {
+            "userId": "uuid",        # (optional) 승인/거절한 사용자 ID
+            "action": "112_POLICE",  # 액션 코드
+            "description": "..."     # 최종 설명 (도구 실행 결과 포함)
         }
 
-        result: Dict[str, Optional[str]] = {}
+        [Response Body]
+        {
+            "actionId": "uuid"       # 갱신된 action ID
+        }
 
-        for report_format, file_data in reports.items():
-            if not file_data:
-                result[report_format] = None
-                continue
+        Args:
+            event_id: 이벤트 ID
+            action_id: 갱신할 action ID
+            action: 액션 코드 (예: "112_POLICE", "REJECTED_112_POLICE")
+            description: 최종 설명 (도구 실행 결과 포함)
+            user_id: 승인/거절한 사용자 ID (optional)
 
-            # 1. presigned URL 획득
-            url_info = self.get_report_upload_url(event_id, report_format)
-            if not url_info:
-                self.logger.error(f"❌ [보고서 URL 획득 실패] {event_id} - {report_format}")
-                result[report_format] = None
-                continue
+        Returns:
+            갱신된 actionId 또는 None (실패 시)
+        """
+        # config에서 관리되는 엔드포인트 템플릿 사용
+        endpoint = self.action_update_endpoint_template.format(
+            event_id=event_id, action_id=action_id
+        )
 
-            # 2. 업로드
-            content_type = content_types.get(report_format, "application/octet-stream")
-            success = self.upload_report(url_info["upload_url"], file_data, content_type)
+        # Request Body 구성 (userId는 optional)
+        payload = {
+            "action": action,
+            "description": description,
+        }
+        if user_id:
+            payload["userId"] = user_id
 
-            if success:
-                result[report_format] = url_info["report_path"]
-                self.logger.info(f"✅ [보고서 업로드 완료] {event_id} - {report_format}: {url_info['report_path']}")
-            else:
-                result[report_format] = None
+        try:
+            self.logger.info(f"[HITL] Action 갱신 요청: {event_id} - actionId={action_id}")
 
-        return result
+            response = requests.patch(
+                endpoint,
+                json=payload,
+                timeout=self.timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            updated_action_id = data.get("actionId")
+
+            self.logger.info(f"[HITL] Action 갱신 완료: {event_id} - actionId={updated_action_id}")
+            return updated_action_id
+
+        except Timeout:
+            self.logger.warning(f"⏱️ [HITL] Action 갱신 타임아웃: {event_id}")
+            return None
+
+        except RequestException as e:
+            self.logger.error(f"❌ [HITL] Action 갱신 실패: {event_id} - {e}")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"💥 [HITL] Action 갱신 예외: {event_id} - {e}", exc_info=True)
+            return None

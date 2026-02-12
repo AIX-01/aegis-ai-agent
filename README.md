@@ -65,7 +65,19 @@ src/
 │   │   └── store_embedding.py  # 이벤트 임베딩 저장 (response_agent 완료 후 순차 실행)
 │   ├── subgraphs/
 │   │   ├── __init__.py
-│   │   └── response_agent.py   # ReAct Agent (대응 조치 + 보고서 생성 + 업로드)
+│   │   ├── response_agent.py   # ReAct Agent 서브그래프 빌더
+│   │   ├── state.py            # ResponseAgentState 정의
+│   │   ├── nodes/              # 서브그래프 노드 (기능별 분리)
+│   │   │   ├── __init__.py
+│   │   │   ├── search_knowledge.py   # 지식 검색 (매뉴얼 + 과거 사례)
+│   │   │   ├── agent.py              # LLM 에이전트 + 시스템 프롬프트
+│   │   │   ├── check_approval.py     # HITL 승인 관련
+│   │   │   ├── extract_actions.py    # 조치 정보 추출
+│   │   │   ├── generate_report.py    # 보고서 생성
+│   │   │   └── update_backend.py     # 백엔드 갱신
+│   │   └── edges/              # 서브그래프 라우터 (조건부 분기)
+│   │       ├── __init__.py
+│   │       └── routers.py            # should_continue, approval_router
 │   └── edges/
 │       ├── __init__.py
 │       └── routers.py          # 조건부 분기 (analysis_router, verification_router)
@@ -76,9 +88,9 @@ src/
 │
 └── tools/                      # LangChain 도구 및 유틸리티
     ├── __init__.py
-    ├── embedding_tools.py      # 임베딩 도구 (텍스트→벡터 변환)
+    ├── manual_templates.py     # 대응 매뉴얼 템플릿 (이벤트 유형별)
     ├── search_tools.py         # 매뉴얼/사례 검색 (VectorStoreClient 사용)
-    └── response_tools.py       # 대응 도구 (LangChain Tool - response_agent용)
+    └── response_tools.py       # 대응 도구 (execute_field_action, emergency_call)
 
 templates/
 └── reports/                    # 보고서 템플릿
@@ -114,6 +126,8 @@ scripts/
 |--------|------|------|
 | GET | `/health` | 헬스 체크 |
 | GET | `/status` | 에이전트 상태 조회 |
+
+> **Note**: Human-in-the-Loop 승인은 백엔드 API를 경유하여 처리됩니다. (아래 HITL 섹션 참조)
 
 ---
 
@@ -397,11 +411,33 @@ LangGraph 파이프라인의 상태 정의입니다.
 
 | 필드 | 타입 | 태그 | 설명 |
 |------|------|------|------|
-| actions | list | [S→M] | 대응 조치 리스트 [{type, description}, ...] |
+| actions | list | [S→M] | 대응 조치 리스트 [{type, action, log, triggered_at}, ...] |
 | rag_references | list | [S→M] | 검색된 참조 문서들 [{type, content}, ...] |
 | embedding_stored | bool | [M] | 이벤트 임베딩 저장 여부 |
 | report_updated | bool | [S→M] | 보고서 백엔드 갱신 여부 |
 | errors | List[str] | [M/S] | 에러 메시지 목록 |
+
+**actions 필드 상세 (백엔드 EventAction 테이블과 일치):**
+
+| 필드 | 타입 | 설명 | 예시 값 |
+|------|------|------|--------|
+| type | str | 조치 유형 | `field_action`, `emergency_call` |
+| action | str | 액션 코드 | `BROADCAST`, `112_POLICE` 등 |
+| log | str | 상세 로그 | 실행 결과 마크다운 텍스트 |
+| triggered_at | str | 발동 시각 (ISO 8601) | `2026-02-11T22:30:00` |
+
+**action 코드 목록:**
+
+| type | action 코드 | 설명 |
+|------|------------|------|
+| `field_action` | `BROADCAST` | CCTV 스피커 방송 |
+| `field_action` | `LIGHT_ON` | 현장 조명 점등 |
+| `field_action` | `PTZ_TRACK` | PTZ 카메라 추적 |
+| `field_action` | `SIREN` | 경고 사이렌 |
+| `emergency_call` | `112_POLICE` | 경찰 신고 |
+| `emergency_call` | `119_FIRE` | 소방/응급 신고 |
+| `emergency_call` | `SECURITY_TEAM` | 내부 보안팀 |
+| `emergency_call` | `MANAGEMENT` | 관리사무소 |
 
 **태그 설명:**
 - `[M]` = Main Graph에서만 사용
@@ -423,14 +459,169 @@ LangGraph 워크플로우를 빌드합니다.
 
 ---
 
+### graph/subgraphs/response_agent.py - 서브그래프 상세
+
+> **최종 수정일:** 2026-02-12
+
+#### 노드 목록
+
+| 노드 | 역할 | 비고 |
+|------|------|------|
+| `search_knowledge` | 대응 매뉴얼 + 과거 사례 검색 | ReAct 루프 진입 전 무조건 실행 |
+| `agent` | LLM이 도구 호출 결정 | 시스템 프롬프트에 검색 결과 주입 |
+| `tools` | LangChain ToolNode (도구 실행) | execute_field_action, emergency_call |
+| `increment` | 반복 횟수 증가 | 무한 루프 방지 (최대 5회) |
+| `check_approval` | HITL 승인 요청 및 대기 | emergency_call 시에만 실행 |
+| `skip_emergency` | emergency_call 스킵 메시지 생성 | 거부/타임아웃 시 실행 |
+| `extract_actions` | 메시지에서 조치 정보 추출 | 백엔드 갱신 포함 |
+| `generate_report` | 보고서 생성 (PDF, DOCX, PPTX) | 템플릿 기반 |
+| `update_backend` | 백엔드에 보고서/조치 갱신 | API 호출 |
+
+#### 워크플로우 다이어그램
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                        response_agent 서브그래프                                     │
+├─────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                     │
+│  START                                                                              │
+│    │                                                                                │
+│    ▼                                                                                │
+│  ┌─────────────────┐                                                                │
+│  │ search_knowledge │  ← 매뉴얼 + 과거 사례 검색 (무조건 실행)                        │
+│  └────────┬────────┘                                                                │
+│           │                                                                         │
+│           ▼                                                                         │
+│  ┌─────────────────┐                                                                │
+│  │     agent       │  ← LLM이 도구 호출 결정 (검색 결과 + 법적 근거 참조)             │
+│  └────────┬────────┘                                                                │
+│           │                                                                         │
+│           ▼                                                                         │
+│  ┌─────────────────┐                                                                │
+│  │ should_continue │  ← 조건부 라우터                                               │
+│  └────────┬────────┘                                                                │
+│           │                                                                         │
+│     ┌─────┼─────────────────┬──────────────────┐                                    │
+│     │     │                 │                  │                                    │
+│     ▼     ▼                 ▼                  ▼                                    │
+│  "tools" "check_approval" "report"           "end"                                  │
+│     │     │                 │                  │                                    │
+│     │     ▼                 │                  ▼                                    │
+│     │  ┌─────────────────┐  │                 END                                   │
+│     │  │ check_approval  │  │  ← HITL 승인 요청 (백엔드 API 경유)                    │
+│     │  └────────┬────────┘  │                                                       │
+│     │           │           │                                                       │
+│     │           ▼           │                                                       │
+│     │  ┌─────────────────┐  │                                                       │
+│     │  │ approval_router │  │  ← 승인 결과에 따라 분기                               │
+│     │  └────────┬────────┘  │                                                       │
+│     │           │           │                                                       │
+│     │     ┌─────┴─────┐     │                                                       │
+│     │     │           │     │                                                       │
+│     │     ▼           ▼     │                                                       │
+│     │  "tools"  "skip_emergency"                                                    │
+│     │     │           │     │                                                       │
+│     ▼     ▼           ▼     │                                                       │
+│  ┌─────────────────┐  │     │                                                       │
+│  │     tools       │  │     │  ← 도구 실행 (execute_field_action, emergency_call)   │
+│  └────────┬────────┘  │     │                                                       │
+│           │           │     │                                                       │
+│           ▼           ▼     │                                                       │
+│  ┌─────────────────┐  │     │                                                       │
+│  │   increment     │◄─┘     │  ← 반복 횟수 증가                                      │
+│  └────────┬────────┘        │                                                       │
+│           │                 │                                                       │
+│           └────────┐        │                                                       │
+│                    ▼        │                                                       │
+│                  agent      │  ← 다시 LLM 판단 (ReAct 루프)                          │
+│                    │        │                                                       │
+│                    └────────┤                                                       │
+│                             │                                                       │
+│                             ▼                                                       │
+│                    ┌─────────────────┐                                              │
+│                    │ extract_actions │  ← 조치 정보 추출 + 백엔드 갱신               │
+│                    └────────┬────────┘                                              │
+│                             │                                                       │
+│                             ▼                                                       │
+│                    ┌─────────────────┐                                              │
+│                    │ generate_report │  ← 보고서 생성 (PDF, DOCX, PPTX)             │
+│                    └────────┬────────┘                                              │
+│                             │                                                       │
+│                             ▼                                                       │
+│                    ┌─────────────────┐                                              │
+│                    │ update_backend  │  ← 백엔드에 보고서/조치 갱신                  │
+│                    └────────┬────────┘                                              │
+│                             │                                                       │
+│                             ▼                                                       │
+│                            END                                                      │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### LLM 응답 형식
+
+LLM은 도구 호출 전 다음 형식으로 판단 근거를 설명합니다:
+
+```markdown
+### 과거 사례 분석
+- 유사 사례: [N]건 발견
+- 과거 대응 조치: [조치명] [N]회 ([비율]%)
+- 시간대 패턴: [N]시~[N]시에 [N]건 발생
+- 요일 패턴: [요일]에 [N]건 발생
+- 장소 패턴: [장소명]에서 반복 발생 여부
+
+### 법적 근거
+- 관련 법령: [법령명 및 조항]
+- 적용 사유: [해당 법령이 적용되는 이유]
+
+### 판단 근거
+[과거 사례와 매뉴얼을 참고하여 선택 이유 1~2문장]
+
+### 선택한 조치
+1. [조치명] - [이유]
+2. [조치명] - [이유] (있는 경우)
+```
+
+#### should_continue 라우터 분기 조건
+
+| 반환값 | 조건 | 다음 노드 |
+|--------|------|----------|
+| `"tools"` | field_action만 호출 | tools |
+| `"check_approval"` | emergency_call 포함 | check_approval (HITL) |
+| `"report"` | 도구 호출 없음 | extract_actions |
+| `"end"` | 최대 반복 횟수 도달 | END |
+
+---
+
 ### 임베딩 및 RAG 검색 흐름
 
 #### 개요
 
-| 구분 | 동작 | 임베딩 시점 | 저장 여부 |
-|-----|------|-----------|----------|
-| **과거 사례** | `store_embedding` 노드에서 저장 | 사건 처리 완료 시 | ✅ Qdrant에 저장 |
-| **현재 사건 (검색용)** | `search_protocol_and_cases` 도구에서 검색 | 검색 시 실시간 | ❌ 저장 안 함 |
+| 구분 | 노드 | 동작 | Qdrant 저장 |
+|-----|------|------|-------------|
+| **과거 사례 저장** | `store_embedding` | 처리 완료된 사건을 Qdrant에 저장 | ✅ 저장함 |
+| **유사 사례 검색** | `search_knowledge` | 현재 사건으로 Qdrant에서 유사 사례 검색 | ❌ 검색 결과는 저장 안 함 |
+
+```
+[사건 A 처리 완료] → store_embedding → Qdrant 저장 ─┐
+[사건 B 처리 완료] → store_embedding → Qdrant 저장 ─┼─→ past_cases 컬렉션
+[사건 C 처리 완료] → store_embedding → Qdrant 저장 ─┘
+                                                      ↑
+[현재 사건 D 발생]                                     │
+       ↓                                              │
+  search_knowledge ─── 검색 쿼리로 유사 사례 조회 ──────┘
+       ↓                                    (검색만, 저장 X)
+  검색 결과를 LLM에게 전달
+       ↓
+  response_agent (대응 조치)
+       ↓
+  store_embedding ─── 현재 사건 D를 Qdrant에 저장 ✅
+       ↓                (미래 검색용)
+  [미래에 사건 E 발생 시 D가 검색됨]
+```
+
+> **변경사항 (2026-02-11)**: 기존 `search_protocol_and_cases` 도구가 `search_knowledge` 노드로 분리되어
+> ReAct 루프 진입 전에 무조건 실행됩니다.
 
 #### 저장 흐름 (store_embedding)
 
@@ -441,11 +632,19 @@ LangGraph 워크플로우를 빌드합니다.
     ↓
 store_embedding 노드
     ↓
-임베딩 대상 텍스트 구성:
-    "카메라: {camera_name} ({camera_location})
-     발생시각: {occurred_at}
-     이벤트유형: {event_type}
-     상황: {summary}"
+임베딩 대상 텍스트 구성 (핵심 데이터만 선별):
+    "상황: {summary} | 위치: {camera_name} {camera_location} | 유형: {event_type}"
+    
+    ※ 선별 기준:
+    - summary: 상황 설명 (가장 중요, 맨 앞 배치)
+    - camera_name, camera_location: 위치 정보
+    - event_type: 이벤트 유형
+    
+    ※ 제외 (payload에만 저장):
+    - event_id, camera_uuid: 식별자
+    - risk_score, risk_level: 필터링으로 처리
+    - occurred_at: 필터링으로 처리
+    - actions: 결과 표시용
     ↓
 OpenAI Embedding API 호출 → 벡터 변환
     ↓
@@ -466,26 +665,62 @@ Qdrant (past_cases 컬렉션) 저장
 | `summary` | 상황 요약 |
 | `occurred_at` | 발생 시각 |
 | `text_embedded` | 임베딩된 원본 텍스트 |
+| `actions` | 대응 조치 리스트 (2026-02-12 추가) |
 
-#### 검색 흐름 (search_protocol_and_cases)
+> **참고 (2026-02-12):** `actions` 필드가 추가되어 과거 대응 조치를 검색 결과에서 참조할 수 있습니다.
+> 형식: `[{"action": str, "description": str, "user_id": str | None}, ...]`
+
+#### 검색 흐름 (search_knowledge 노드)
 
 현재 사건과 유사한 **과거 사례**를 검색합니다.
 
+> **변경사항 (2026-02-11)**: 기존 `search_protocol_and_cases` 도구가 `search_knowledge` 노드로 분리되었습니다.
+> 이제 검색은 ReAct 루프 진입 전에 **무조건 실행**됩니다.
+>
+> **변경사항 (2026-02-12)**: 노드 파일 분리로 인해 `nodes/search_knowledge.py`로 이동했습니다.
+
 ```
-[response_agent에서 LLM이 도구 호출 결정]
+[response_agent 서브그래프 진입]
     ↓
-LLM이 상황 컨텍스트(summary, camera_name 등)를 보고 query 파라미터 생성
+search_knowledge 노드 (무조건 실행)
     ↓
-search_protocol_and_cases(summary="상황요약", event_type=event_type, ...)
+검색 쿼리 구성: "상황: {summary} | 위치: {camera_name} {camera_location} | 유형: {event_type}"
     ↓
 query를 실시간 임베딩 (OpenAI Embedding API)
     ↓
 Qdrant (past_cases 컬렉션) 유사도 검색
     ↓
-유사한 과거 사례 반환 + 대응 매뉴얼 템플릿
+검색 결과를 state.rag_references, state.knowledge_context에 저장
+    ↓
+agent 노드로 전달 (LLM 프롬프트에 검색 결과 주입)
+    ↓
+LLM이 도구 호출 결정 (execute_field_action, emergency_call)
+    ↓
+should_continue() 라우터
+    │
+    ├─ field_action만 → tools 노드 → 바로 실행
+    │
+    └─ emergency_call 포함 → check_approval 노드 (Human-in-the-Loop)
+                               ↓
+                         SSE로 브라우저에 승인 요청 전송
+                               ↓
+                         모달에서 [승인]/[거부] 버튼 클릭
+                               ↓
+                         POST /api/approval/{request_id}
+                               ↓
+                         ┌─────┴─────┐
+                         ↓           ↓
+                      승인         거부/타임아웃
+                         ↓           ↓
+                      tools       skip_emergency
+                         ↓           ↓
+                      실행         스킵 메시지
 ```
 
-**참고:** query 값은 코드에 하드코딩되어 있지 않으며, LLM(GPT)이 Tool Calling으로 자동 결정합니다.
+**장점:**
+- 검색이 **100% 보장**됨 (LLM 판단에 의존하지 않음)
+- ReAct 루프 **1~2회 감소** → LLM API 비용 절감
+- 도구 호출 결정 왕복 시간 제거 → **응답 속도 향상**
 
 ---
 
@@ -496,13 +731,37 @@ Qdrant (past_cases 컬렉션) 유사도 검색
 response_agent에서 사용하는 LangChain Tool들을 정의합니다.
 
 **create_response_tools(config) 함수:**
-- 반환: `[search_protocol_and_cases, execute_field_action, emergency_call]`
+- 반환: `[execute_field_action, emergency_call]`
 
 | 도구 | 설명 | 파라미터 |
 |------|------|----------|
-| `search_protocol_and_cases` | 대응 매뉴얼 및 과거 사례 검색 | summary, event_type, camera_name, camera_location |
 | `execute_field_action` | 현장 물리적 조치 실행 | action_name (BROADCAST/LIGHT_ON/PTZ_TRACK/SIREN), camera_id, message_content |
 | `emergency_call` | 긴급 신고 접수 | agency_type (112_POLICE/119_FIRE/SECURITY_TEAM/MANAGEMENT), situation_report |
+
+> **참고**: `search_protocol_and_cases`는 `search_knowledge` 노드로 분리되어 
+> ReAct 루프 진입 전에 무조건 실행됩니다. (2026-02-11 변경)
+
+**LLM 대응 기준 (시스템 프롬프트):**
+
+| 이벤트 유형 | 대응 기준 |
+|------------|----------|
+| SWOON (실신) | 즉시 119 신고, 현장 방송으로 주변에 알림 |
+| ASSAULT (폭행) | 112 신고 + 보안팀 출동, 현장 방송/사이렌 |
+| BURGLARY (절도) | 112 신고 + 보안팀 출동, PTZ 추적 |
+| VANDALISM (기물파손) | 보안팀 출동, 현장 방송 |
+| DUMP (무단투기) | 현장 방송으로 경고, 기록 보존 |
+
+**복합 상황 대응 (LLM 판단) - 2026-02-12 추가:**
+
+LLM은 이벤트 유형만 보지 않고, `summary`의 세부 내용을 분석하여 복합적인 대응을 판단합니다:
+
+| 복합 상황 | 대응 |
+|----------|------|
+| 폭행(ASSAULT) 중 부상자/실신자 발생 | 112 + 119 동시 신고 |
+| 절도(BURGLARY) 중 폭행 발생 | 112 신고 + PTZ 추적 + 현장 방송 |
+| 기물파손(VANDALISM) 중 부상자 발생 | 112 + 119 동시 신고 |
+
+> **핵심**: 인명 피해 가능성이 있으면 119를 반드시 포함합니다.
 
 **사용 예시:**
 ```python
@@ -511,21 +770,177 @@ from src.config import Config
 
 config = Config()
 tools = create_response_tools(config)
-# tools = [search_protocol_and_cases, execute_field_action, emergency_call]
+# tools = [execute_field_action, emergency_call]
 ```
 
-#### tools/embedding_tools.py - 임베딩 도구
+---
 
-OpenAI Embedding API를 사용하여 텍스트를 벡터로 변환합니다.
+### Human-in-the-Loop (긴급 신고 승인 시스템)
 
-| 함수 | 설명 |
+> **갱신됨 (2026-02-11)**: 백엔드 API 경유 방식으로 전면 개편
+
+#### 개요
+
+긴급 신고(112, 119 등)는 실행 전에 사용자의 승인이 필요합니다.
+**백엔드 API 경유 방식**으로 구현되어 있으며, AI Agent는 백엔드에 승인 요청을 보내고 응답을 대기합니다.
+
+**특징:**
+- 백엔드 API 경유 (브라우저 직접 통신 없음)
+- event_actions DB 테이블과 매핑
+- 승인자/거절자 정보 포함 (userName, userMail)
+- 타임아웃 틀 유지 (백엔드에서 구현 가능)
+
+#### 아키텍처
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         AI Agent (Python/FastAPI)                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  [LangGraph 실행 중]                                                     │
+│       │                                                                  │
+│       ▼                                                                  │
+│  emergency_call 도구 호출 감지                                            │
+│       │                                                                  │
+│       ▼                                                                  │
+│  ┌────────────────────┐                                                  │
+│  │ check_approval_node│                                                  │
+│  │ (nodes/check_      │                                                  │
+│  │  approval.py)      │                                                  │
+│  └─────────┬──────────┘                                                  │
+│            │                                                             │
+│            ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Step 1: create_action()                                          │    │
+│  │   POST /internal/agent/events/{eventId}/actions                  │    │
+│  │   Request:  {action, description}                                │    │
+│  │   Response: {actionId}                                           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│            │                                                             │
+│            ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Step 2: confirm_action() - 사용자 응답 대기                       │    │
+│  │   POST /internal/agent/events/{eventId}/actions/{actionId}/confirm│   │
+│  │   Request:  (없음)                                                │    │
+│  │   Response: {userId, userName, userMail, result}                  │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│            │                                                             │
+│            ▼                                                             │
+│  승인: tools 노드 → emergency_call 실행                                   │
+│  거부: skip_emergency 노드 → 스킵 메시지 생성                              │
+│            │                                                             │
+│            ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │ Step 3: update_action() - 도구 실행 결과 갱신                     │    │
+│  │   PATCH /internal/agent/events/{eventId}/actions/{actionId}      │    │
+│  │   Request:  {userId, action, description}                        │    │
+│  │   Response: {actionId}                                           │    │
+│  └─────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Backend (Spring Boot)                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│  1. Action 생성 요청 수신 → event_actions 테이블 INSERT                   │
+│  2. 프론트엔드에 알림 (SSE, WebSocket 등 - 백엔드 담당)                    │
+│  3. 사용자 승인/거절 → event_actions 테이블 UPDATE                        │
+│  4. confirm API 응답 반환                                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 백엔드 API 스펙
+
+**API 1: Action 생성**
+```
+POST /internal/agent/events/{eventId}/actions
+
+Request Body:
+{
+    "action": "112_POLICE",
+    "description": "긴급 신고 요청: A동 1층 로비에서 남성 2인이 폭행 중..."
+}
+
+Response Body:
+{
+    "actionId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**API 2: HITL 승인 확인 (사용자 응답까지 대기)**
+```
+POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
+
+Request Body: (없음)
+
+Response Body:
+{
+    "userId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "userName": "홍길동",
+    "userMail": "hong@example.com",
+    "result": true
+}
+```
+
+**API 3: Action 갱신 (도구 실행 후)**
+```
+PATCH /internal/agent/events/{eventId}/actions/{actionId}
+
+Request Body:
+{
+    "userId": "a1b2c3d4-...",           // optional (타임아웃 시 null)
+    "action": "112_POLICE",             // 또는 "REJECTED_112_POLICE"
+    "description": "[APPROVED] 경찰청 112 긴급 신고 접수 | 승인자: 홍길동 ..."
+}
+
+Response Body:
+{
+    "actionId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+#### 액션 코드
+
+| 상태 | 액션 코드 예시 |
+|------|---------------|
+| 승인 | `112_POLICE`, `119_FIRE`, `SECURITY_TEAM`, `MANAGEMENT` |
+| 거절 | `REJECTED_112_POLICE`, `REJECTED_119_FIRE` 등 |
+| 타임아웃 | `TIMEOUT_112_POLICE`, `TIMEOUT_119_FIRE` 등 |
+
+#### DB 매핑 (event_actions 테이블)
+
+| DB 컬럼 | 타입 | AI Agent 값 |
+|---------|------|-------------|
+| `id` | UUID | (자동생성) |
+| `event_id` | UUID | URL path에서 전달 |
+| `user_id` | UUID | Request body의 `userId` |
+| `action` | TEXT | Request body의 `action` |
+| `description` | TEXT | Request body의 `description` |
+| `created_at` | TIMESTAMP | (자동생성) |
+| `updated_at` | TIMESTAMP | (자동생성) |
+
+#### description 형식 예시
+
+```
+# 승인
+[APPROVED] 경찰청 112 긴급 신고 접수 | 승인자: 홍길동 (hong@example.com) (접수번호: EMG-..., 접수 시각: ...)
+
+# 거절
+[REJECTED] 긴급 신고 요청이 사용자에 의해 거부됨 | 거절자: 홍길동 (hong@example.com)
+
+# 타임아웃
+[TIMEOUT] 긴급 신고 요청에 대한 응답 타임아웃
+```
+
+#### 관련 파일
+
+| 파일 | 역할 |
 |------|------|
-| `get_text_embedding(text, config)` | 단일 텍스트 → 벡터 변환 |
-| `get_batch_embeddings(texts, config)` | 배치 텍스트 → 벡터 리스트 변환 |
-| `calculate_similarity(vec1, vec2)` | 두 벡터 간 코사인 유사도 계산 |
+| `src/clients/backend_client.py` | `create_action()`, `confirm_action()`, `update_action()` |
+| `src/graph/subgraphs/nodes/check_approval.py` | `check_approval_node`, `approval_router`, `skip_emergency_call_node` |
+| `src/graph/subgraphs/nodes/extract_actions.py` | `extract_actions` |
 
-#### tools/search_tools.py - 검색 도구
-
+---
 VectorStoreClient를 사용하여 Qdrant에서 유사 문서를 검색합니다.
 
 | 함수 | 설명 | 컬렉션 |
@@ -545,16 +960,15 @@ VectorStoreClient를 사용하여 Qdrant에서 유사 문서를 검색합니다.
                                                     ↑
 [현재 사건 D]                                       │
     │                                               │
-    ├─ 1. response_agent ─→ search_protocol_and_cases ─┘ (과거 사례 검색)
+    ├─ 1. response_agent ─→ search_knowledge ───────┘ (과거 사례 검색, 무조건 실행)
     │         ↓
     └─ 2. store_embedding ─→ Qdrant 저장 (미래 검색용)
 ```
 
 **핵심 포인트:**
 - `response_agent` → `store_embedding` **순차 실행** (병렬 아님)
-- 검색이 먼저 수행되고, 저장이 나중에 수행됨
-- 따라서 **현재 사건은 검색 결과에 포함되지 않음** (의도된 설계)
-- 현재 사건은 처리 완료 후 저장되어 **미래 유사 사건 발생 시** 검색에 활용됨
+- `search_knowledge` 노드가 **무조건 실행**되어 검색 보장 (`nodes/search_knowledge.py`)
+- 기존 사건은 처리 완료 후 저장되어 **미래 유사 사건 발생 시** 검색에 활용됨
 
 ---
 
@@ -562,10 +976,9 @@ VectorStoreClient를 사용하여 Qdrant에서 유사 문서를 검색합니다.
 
 #### 현재 상태 및 성능 이슈
 
-`search_protocol_and_cases` 도구는 **과거 사례 검색**과 **대응 매뉴얼 조회**를 수행합니다.
-
+`search_knowledge` 노드는 **과거 사례 검색**과 **대응 매뉴얼 조회**를 수행합니다.
 ```
-search_protocol_and_cases 호출 시 내부 흐름:
+search_knowledge 노드 실행 시 내부 흐름:
 │
 ├── 1. 과거 사례 검색 (VectorStoreClient) ⚠️ 느림 (20-30초)
 │   └── query 텍스트
@@ -664,70 +1077,6 @@ LLM 판단:
 → "반복 범죄 패턴 - 112 신고 시 이전 사건 정보 함께 전달"
 → "인상착의 정보 강조하여 보고서 작성"
 ```
-
-#### 권장 구현 로드맵
-
-| 단계 | 상태 | 설명 |
-|------|------|------|
-| 1단계 | ✅ 완료 | 하드코딩 매뉴얼 (5개 이벤트 유형) |
-| 2단계 | ⚠️ 현재 | 과거 사례 RAG 검색 (데이터 소량, 성능 이슈) |
-| 3단계 | 📋 계획 | 필터링 우선 검색 (event_type, location, time 필터 후 임베딩) |
-| 4단계 | 📋 계획 | 통계 정보 추출 (평균 대응 시간, 효과적 조치 비율) |
-
-**3단계 구현 시 검색 구조:**
-```
-search_protocol_and_cases 호출
-│
-├── 1단계: 메타데이터 필터링 (빠름, 임베딩 없음)
-│   ├── event_type = "ASSAULT"
-│   ├── camera_location LIKE "%주차장%"
-│   └── 시간대 = "야간"
-│   → 후보 10개 추출
-│
-├── 2단계: 임베딩 유사도 (선택적, 후보 내에서만)
-│   └── summary 기반 유사도 비교
-│   → 최종 3개 선택
-│
-├── 3단계: 통계 정보 추출
-│   ├── 평균 대응 시간
-│   ├── 효과적이었던 조치 비율
-│   └── 반복 발생 횟수
-│
-└── 4단계: 매뉴얼 + 과거 사례 결합
-    ├── 기본 매뉴얼 (하드코딩)
-    └── 과거 사례 기반 보완 정보
-```
-
----
-
-### api/mock_server.py
-
-개발/테스트용 Mock 서버입니다.
-
-**MockVLMServer (포트 8001):**
-- POST /analyze
-- 25% ABNORMAL, 25% SUSPICIOUS, 50% NORMAL
-- 랜덤 event_type 반환
-
-**MockPrecisionServer (포트 8002):**
-- POST /precision_analyze
-- risk_score: 0.8~1.0 (이상), 0.0~0.2 (정상)
-
-**MockBackendServer (포트 8088):**
-- POST /api/vlm-results → event_id 생성
-- PATCH /api/vlm-results/{event_id} → 이벤트 갱신 (report, actions 포함)
-- POST /api/vlm-results/{event_id}/report → 보고서 업로드 URL 반환
-- PUT /api/vlm-results/{event_id}/report/upload → 보고서 로컬 저장
-
-**Mock 보고서 저장 위치:**
-```
-mock_reports/
-└── {event_id}/
-    ├── report.pdf
-    ├── report.docx
-    └── report.pptx
-```
-
 ---
 
 ## 실행 방법
@@ -818,8 +1167,18 @@ PATCH /internal/agent/events/{event_id}/analysis
     "generated_at": "2026-02-09T14:35:00"
   },
   "actions": [
-    {"type": "emergency_call", "description": "112 긴급 신고 완료"},
-    {"type": "field_action", "description": "보안팀 현장 출동 지시"}
+    {
+      "type": "emergency_call",
+      "action": "112_POLICE",
+      "log": "## 긴급 신고 접수 결과\n\n- 신고 기관: 경찰청 112\n- 접수 시각: 2026-02-11 22:30:15\n- 상태: ✅ 접수 완료",
+      "triggered_at": "2026-02-11T22:30:15"
+    },
+    {
+      "type": "field_action",
+      "action": "BROADCAST",
+      "log": "## 현장 조치 실행 결과\n\n- 액션: BROADCAST\n- 대상 카메라: camera-001\n- 상태: ✅ 성공",
+      "triggered_at": "2026-02-11T22:30:00"
+    }
   ]
 }
 ```
@@ -860,276 +1219,12 @@ python scripts/test_report_templates.py
 
 ## 워크플로우
 
-### 개요 다이어그램
+### 개요 다이어그램 (메인 흐름)
 
 ```mermaid
 graph TD
     subgraph RealTime["[1단계] 실시간 영상 처리 및 VLM 판독"]
         ExtMgr["스프링부트 백엔드"]
-        RedisCh[("Redis Pub/Sub<br>(camera:analysis:update)")]
-        RM["RedisManager"]
-
-        RM -. "1. 구독" .-> RedisCh
-        ExtMgr -- "2. 'update' 발행" --> RedisCh
-        RedisCh -- "3. 알림" --> RM
-        
-        RM -- "4. 스트림 업데이트" --> P["5. Producer"]
-        P -- "Path A: 분석용 디코딩" --> W["6. Window Manager"]
-        P -- "Path B: 저장용 버퍼링" --> PB[("Packet Buffer")]
-        
-        W --> Q["7. 작업 큐"]
-        Q --> C["8. Consumer"]
-        C --> VLM["9. VLM 1차 분석"]
-        VLM --> Router{"10. 이상 감지 여부"}
-        Router -- "이상/의심" --> BR["11. 1차 백엔드 보고<br>(event_id 발급)"]
-        BR --> Clip["12. 영상 클립 생성 & 업로드<br>(PacketBuffer -> S3)"]
-        Clip -. "데이터 인출" .-> PB
-        Router -- "정상" --> EndLocal((End))
-    end
-
-    subgraph LangGraph["[2단계] LangGraph 분석/추론"]
-        Clip ~~~ Start
-        Start("13. Start<br>(with event_id)")
-        
-        Start --> N_Precise["14. 정밀 분석 LLM <br>(precision_analysis)"]
-        N_Precise --> N_Verify["15. 검증<br>(verification)<br>OpenAI Vision으로<br>정밀분석 결과 검증"]
-        N_Verify --> N_Update["16. 백엔드 갱신<br>(update_backend)"]
-        N_Update --> Router2{"17. 검증 결과<br>(verification_router)"}
-        
-        Router2 -- "SUSPICIOUS<br>(검증 실패)" --> EndGraph((End))
-        
-        Router2 -- "ABNORMAL<br>(검증 통과)" --> SubAgent
-        
-        subgraph SubAgent["18. response_agent (ReAct Agent 서브그래프)"]
-            direction TB
-            SA_Agent["LLM Agent"]
-            SA_Tools["도구 실행<br>(search_protocol_and_cases,<br>execute_field_action,<br>emergency_call)"]
-            SA_Report["보고서 생성<br>(generate_report)"]
-            SA_UpdateBackend["백엔드 갱신<br>(update_backend)"]
-            
-            SA_Agent -- "도구 호출" --> SA_Tools
-            SA_Tools -- "결과 반환" --> SA_Agent
-            SA_Agent -- "완료" --> SA_Report
-            SA_Report --> SA_UpdateBackend
-        end
-        
-        SubAgent --> N_Embed["19. 임베딩 저장<br>(store_embedding)"]
-        N_Embed --> EndGraph
-    end
-
-    Clip ==> Start
-```
-
-### 15. 검증(verification) 노드 상세
-
-**역할**: 정밀 분석 결과가 실제 이미지와 일치하는지 OpenAI Vision API로 검증
-
----
-
-#### 검증에 사용되는 정보
-
-| 정보 | 출처 | 용도 |
-|------|------|------|
-| 8개 이미지 | frames | 실제 상황 확인 |
-| 카메라 이름/위치 | camera_name, camera_location | 장소 맥락 파악 |
-| 발생 시각 | occurred_at | 시간 맥락 파악 |
-| 1차 VLM 결과 | vlm_result | 정밀 분석과 비교 |
-| 2차 정밀 분석 결과 | precision_result | 검증 대상 |
-
----
-
-#### 판정 기준
-
-1. **이미지 확인**: 8개 이미지에서 이상 상황이 실제로 보이는지 확인
-2. **장소 맥락**: 카메라 위치를 고려하여 해당 장소에서 발생 가능한 상황인지 판단
-3. **VLM vs 정밀분석 비교**: 1차 VLM과 2차 정밀분석 결과가 다르면 이미지를 보고 판단
-4. **요약 검증**: summary 내용이 이미지에서 실제로 확인되는지 검증
-
----
-
-#### 검증 결과에 따른 동작
-
-**① 정확한 분석 (검증 통과)**
-```
-이미지: 폭행 장면 있음
-정밀 분석: ASSAULT (ABNORMAL)
-    ↓
-검증 결과: ✅ ABNORMAL 유지
-    ↓
-이후 흐름: response_agent → store_embedding → END
-```
-
-**② 이벤트 유형만 틀림 (유형 수정)**
-```
-이미지: 절도 장면 있음 (폭행 아님)
-정밀 분석: ASSAULT (ABNORMAL)
-    ↓
-검증 결과: ✅ ABNORMAL 유지 + event_type → BURGLARY로 수정
-    ↓
-이후 흐름: response_agent → store_embedding → END
-```
-
-**③ 오탐지 (이상 없음)**
-```
-이미지: 이상 상황 없음
-정밀 분석: ASSAULT (ABNORMAL)
-    ↓
-검증 결과: ❌ SUSPICIOUS로 변경
-    ↓
-이후 흐름: 바로 END (대응 조치 없음)
-```
-
----
-
-#### 검증 결과 JSON 형식
-
-```json
-{
-  "risk_level": "ABNORMAL",
-  "event_type": "ASSAULT",
-  "reason": "이미지에서 폭행 상황이 명확히 확인됨"
-}
-```
-
----
-
-**검증 실패 시 (SUSPICIOUS):**
-- 대응 조치(response_agent) 실행 안 함
-- 임베딩 저장(store_embedding) 실행 안 함
-- 16번에서 백엔드에 SUSPICIOUS로 갱신 후 종료
-
----
-
-### 검증 시나리오 예시
-
-> **참고**: 검증 노드는 이미지에서 **명백한 이상 상황이 보이는지** 확인하는 역할입니다.
-> "폭행 vs 절도" 같은 세부 구분은 어렵고, **"이상 있음/없음"** 수준의 판단이 현실적입니다.
-
-#### 시나리오 1: 이상 상황 확인됨 (ABNORMAL 유지)
-
-**입력 데이터:**
-```
-카메라 위치: 1층 로비
-정밀 분석: ASSAULT (ABNORMAL)
-요약: "두 남성이 격렬하게 몸싸움 중"
-```
-
-**OpenAI 응답:**
-```json
-{
-  "risk_level": "ABNORMAL",
-  "event_type": "ASSAULT",
-  "reason": "이미지에서 두 사람이 격렬하게 충돌하는 장면이 확인됨"
-}
-```
-
-**결과:** ✅ ABNORMAL 유지 → response_agent 실행
-
----
-
-#### 시나리오 2: 이상 상황 없음 (오탐지 → SUSPICIOUS)
-
-**입력 데이터:**
-```
-카메라 위치: 2층 복도
-정밀 분석: SWOON (ABNORMAL)
-요약: "사람이 바닥에 쓰러져 있음"
-```
-
-**OpenAI 응답:**
-```json
-{
-  "risk_level": "SUSPICIOUS",
-  "event_type": "SWOON",
-  "reason": "이미지에서 쓰러진 사람이 확인되지 않음. 정상적인 보행 중인 것으로 보임"
-}
-```
-
-**결과:** ❌ SUSPICIOUS로 변경 → 바로 END (대응 조치 없음)
-
----
-
-#### 시나리오 3: 이상은 있지만 유형이 다름 (event_type 수정)
-
-**입력 데이터:**
-```
-카메라 위치: 주차장
-정밀 분석: ASSAULT (ABNORMAL)
-요약: "두 사람이 격렬하게 움직이고 있음"
-```
-
-**OpenAI 응답:**
-```json
-{
-  "risk_level": "ABNORMAL",
-  "event_type": "VANDALISM",
-  "reason": "폭행이 아닌 차량 기물파손 행위로 보임. 한 명이 차량을 발로 차는 장면 확인"
-}
-```
-
-**결과:** ✅ ABNORMAL 유지 + event_type → VANDALISM → response_agent 실행
-
----
-
-### 검증의 한계
-
-| 구분 가능 | 구분 어려움 |
-|----------|-----------|
-| 사람 있음/없음 | 폭행 vs 절도 |
-| 쓰러짐/서있음 | 싸움 vs 장난 |
-| 격렬한 움직임/정상 | 실신 vs 휴식 |
-| 물건 던짐/정상 | 투기 vs 분리수거 |
-
-> 검증은 **"정밀 분석이 완전히 틀렸는지"** 확인하는 안전장치 역할입니다.
-> 세부적인 이벤트 유형 수정보다는 **오탐지 걸러내기**가 주 목적입니다.
-
----
-
-### 검증 정확도 향상 방향성
-
-현재 정적 이미지 8장으로는 **동작의 의도**를 정확히 파악하기 어렵습니다.
-검증 정확도를 높이기 위한 방향성입니다.
-
-| 방법 | 설명 | 상태 |
-|------|------|------|
-| **프레임별 타임스탬프** | 각 프레임의 시간 간격을 프롬프트에 포함 (예: Frame1=0초, Frame2=1초...) | ✅ 구현됨 |
-| **영상 클립 분석** | 8장 이미지 대신 30초 영상 클립을 GPT-4o로 분석 | 미구현 |
-| **프레임 수 증가** | 8장 → 16~32장으로 늘려 움직임 흐름 파악 | 미구현 |
-| **다중 모델 검증** | 여러 VLM 모델로 검증 후 다수결 | 미구현 |
-| **특화 모델 추가** | 폭행/절도 등 행동 인식 특화 모델 사용 | 미구현 |
-
-> 현재는 **오탐지 필터링** 수준의 검증만 수행합니다.
-> 세부적인 이벤트 유형 구분이 필요하면 위 방향성을 검토하세요.
-
-
-### 전체 흐름
-
-1. RedisManager: camera:analysis:update 채널 구독
-2. Redis에서 분석 대상 카메라 목록 조회
-3. 카메라별 FrameProducer 스레드 시작
-4. Producer: RTSP 패킷 수신
-   - Path A: 디코딩 → WindowManager
-   - Path B: PacketBuffer에 버퍼링
-5. WindowManager: 윈도우 생성 → QueueManager
-6. Consumer 워커:
-   - VLM 1차 분석
-   - NORMAL이면 종료
-   - 이상 감지 시: 백엔드 보고 → 클립 생성/업로드 → LangGraph
-7. LangGraph: precision_analysis → verification → update_backend → verification_router → (이상: response_agent → store_embedding / 의심: End)
-
-### 상세 데이터 흐름
-
-```mermaid
-graph TD
-    classDef proc fill:#2d2d2d,stroke:#9e9e9e,stroke-width:2px,color:#ffffff
-    classDef data fill:#1a237e,stroke:#5c6bc0,stroke-width:2px,stroke-dasharray: 5 5,color:#ffffff
-    classDef ext fill:#3e2723,stroke:#ffab91,stroke-width:2px,color:#ffffff
-    classDef router fill:#004d40,stroke:#4db6ac,stroke-width:2px,color:#ffffff
-
-    subgraph RealTime["[1단계] 동적 설정 및 실시간 영상 처리"]
-        direction TB
-        
-        ExtMgr["1. 스프링부트 백엔드"]:::ext
         RedisCam[("Redis Storage<br>analysis:cameras")]:::ext
         RedisCh[("2. Redis Pub/Sub")]:::ext
         RM["3. RedisManager"]:::proc
@@ -1184,15 +1279,16 @@ graph TD
         N_Update["16. update_backend"]:::proc
         Backend2["스프링부트 백엔드"]:::ext
         Router{"17. verification_router"}:::router
-        N_Embed["18. store_embedding"]:::proc
+        SubAgent["18. response_agent<br>(서브그래프)"]:::proc
+        N_Embed["19. store_embedding"]:::proc
         Qdrant[("Qdrant<br>past_cases")]:::ext
         EndFinal((End)):::proc
 
         D_Detail[("상세 분석 결과<br>summary, risk_score")]:::data
         D_Verify[("검증 결과<br>risk_level")]:::data
         D_Req2[("Request<br>risk, type, summary,<br>risk_score")]:::data
-        D_Embed[("Embedding Data<br>camera_uuid, camera_name,<br>camera_location, event_type,<br>risk_level, risk_score,<br>summary, occurred_at<br><br>임베딩 대상: 카메라정보<br>+ 시간 + 이벤트 + summary")]:::data
-        D_Report[("보고서 + 대응조치<br>actions, report")]:::data
+        D_Embed[("Embedding Data")]:::data
+        D_Report[("보고서 + 대응조치")]:::data
 
         D_Input --> N_Precise
         N_Precise --> D_Detail
@@ -1203,33 +1299,8 @@ graph TD
         D_Req2 -.-> Backend2
         N_Update --> Router
         Router -- "의심" --> EndFinal
-        
         Router -- "이상" --> SubAgent
-        
-        subgraph SubAgent["18. response_agent (ReAct Agent 서브그래프)"]
-            direction TB
-            SA_Agent["LLM Agent"]:::proc
-            SA_Tools["도구 실행"]:::proc
-            SA_Extract["조치 추출"]:::proc
-            SA_Report["보고서 생성"]:::proc
-            SA_UpdateBackend["백엔드 갱신"]:::proc
-            
-            D_Context[("상황 정보<br>event_type, summary,<br>risk_level")]:::data
-            D_ToolResult[("검색 결과<br>매뉴얼, 과거사례,<br>현장조치, 신고결과")]:::data
-            D_Actions[("대응 조치<br>field_action, emergency_call")]:::data
-            
-            D_Context --> SA_Agent
-            SA_Agent -- "도구 호출" --> SA_Tools
-            SA_Tools -.-> D_ToolResult
-            D_ToolResult --> SA_Agent
-            SA_Agent -- "완료" --> SA_Extract
-            SA_Extract --> D_Actions
-            D_Actions --> SA_Report
-            SA_Report --> SA_UpdateBackend
-            SA_UpdateBackend -.-> Backend2
-        end
-        
-        SubAgent --> N_Embed["19. store_embedding"]:::proc
+        SubAgent --> N_Embed
         N_Embed -.-> D_Embed
         D_Embed -.-> Qdrant
         N_Embed --> D_Report
@@ -1238,6 +1309,71 @@ graph TD
 
     Clip ==> D_Input
 ```
+
+### 서브그래프 다이어그램 (response_agent)
+
+> `verification_router`에서 "이상"으로 판정된 경우에만 실행됩니다.
+
+```mermaid
+graph TD
+    subgraph SubAgent["response_agent 서브그래프"]
+        direction TB
+        
+        Start((Start)) --> SA_Search
+        
+        SA_Search["지식 검색<br>(search_knowledge)"]
+        SA_Agent["LLM Agent"]
+        SA_Router{"도구 분기<br>(should_continue)"}
+        SA_Check["승인 확인<br>(check_approval)<br>Human-in-the-Loop"]
+        SA_Approval{"승인 결과<br>(approval_router)"}
+        SA_Tools["도구 실행<br>(execute_field_action,<br>emergency_call)"]
+        SA_Skip["스킵<br>(skip_emergency)"]
+        SA_Increment["반복 증가<br>(increment)"]
+        SA_Extract["조치 추출<br>(extract_actions)"]
+        SA_Report["보고서 생성<br>(generate_report)"]
+        SA_UpdateBackend["백엔드 갱신<br>(update_backend)"]
+        
+        Backend["스프링부트 백엔드"]
+        EndNode((End))
+        
+        SA_Search --> SA_Agent
+        SA_Agent --> SA_Router
+        
+        SA_Router -- "field_action만" --> SA_Tools
+        SA_Router -- "emergency_call 포함" --> SA_Check
+        SA_Router -- "도구 없음" --> SA_Extract
+        SA_Router -- "최대 반복" --> SA_Extract
+        
+        SA_Check --> SA_Approval
+        SA_Approval -- "승인" --> SA_Tools
+        SA_Approval -- "거부/타임아웃" --> SA_Skip
+        
+        SA_Tools --> SA_Increment
+        SA_Skip --> SA_Increment
+        SA_Increment --> SA_Agent
+        
+        SA_Extract --> SA_Report
+        SA_Report --> SA_UpdateBackend
+        SA_UpdateBackend -.-> Backend
+        SA_UpdateBackend --> EndNode
+    end
+```
+
+#### 서브그래프 노드 설명
+
+| 노드 | 파일 | 역할 |
+|------|------|------|
+| `search_knowledge` | `nodes/search_knowledge.py` | 매뉴얼 + 과거 사례 검색 (무조건 실행) |
+| `LLM Agent` | `nodes/agent.py` | 도구 호출 결정 |
+| `should_continue` | `edges/routers.py` | 도구 분기 라우터 |
+| `check_approval` | `nodes/check_approval.py` | HITL 승인 요청 및 대기 |
+| `approval_router` | `edges/routers.py` | 승인 결과 분기 |
+| `tools` | LangChain ToolNode | 도구 실행 (field_action, emergency_call) |
+| `skip_emergency` | `nodes/check_approval.py` | 거부/타임아웃 시 스킵 메시지 |
+| `increment` | `nodes/agent.py` | 반복 횟수 증가 (최대 5회) |
+| `extract_actions` | `nodes/extract_actions.py` | 메시지에서 조치 정보 추출 |
+| `generate_report` | `nodes/generate_report.py` | 보고서 생성 (PDF, DOCX, PPTX) |
+| `update_backend` | `nodes/update_backend.py` | 백엔드에 보고서/조치 갱신 |
 
 ---
 
@@ -1252,13 +1388,14 @@ graph TD
 | `services/report_generator.py` | `ReportGeneratorService` | ✅ 완료 | HTML, PDF, DOCX, PPTX 보고서 생성 |
 | `graph/subgraphs/response_agent.py` | `generate_report_node()` | ✅ 완료 | 보고서 생성 + Mock 서버 업로드 |
 | `tools/response_tools.py` | `execute_field_action()` | ⚠️ Mock | CCTV 방송/조명/PTZ/사이렌 제어 (Mock 응답) |
-| `tools/response_tools.py` | `emergency_call()` | ⚠️ Mock | 112/119/보안팀 신고 (Mock 응답) |
-| `tools/response_tools.py` | `search_protocol_and_cases()` | ⚠️ 일부 Mock | 과거 사례는 Qdrant 검색, 매뉴얼은 하드코딩 |
+| `tools/response_tools.py` | `emergency_call()` | ⚠️ Mock | 112/119 신고 시스템 연동 (Mock 응답) |
+| `tools/response_tools.py` | `execute_field_action()`, `emergency_call()` | ⚠️ Mock | 현장 조치 및 긴급 신고 도구 |
+| `graph/subgraphs/response_agent.py` | `search_knowledge_node()` | ✅ 완료 | 매뉴얼/과거 사례 검색 노드 |
 | `clients/vector_store_client.py` | `VectorStoreClient` | ✅ 완료 | Qdrant 연동 (store_embedding에서 사용) |
 | `clients/verification_client.py` | `VerificationClient` | ✅ 완료 | OpenAI Vision API 기반 검증 |
 | `graph/nodes/verification.py` | `verification_node()` | ✅ 완료 | VerificationClient를 사용한 검증 노드 |
 
-### Mock 상태인 기능 (운영 환경 연동 필요)
+### Mock 상태인 기능 (운영 환경 연동 필요 작업)
 
 | 기능 | 현재 상태 | 운영 환경 필요 작업 |
 |------|----------|-------------------|

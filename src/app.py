@@ -4,8 +4,7 @@ AEGIS AI Agent의 메인 진입점 - LangGraph 기반 분석 파이프라인 (Fa
 import argparse
 import threading
 import time
-import asyncio
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -248,6 +247,7 @@ async def get_agent_status():
     if not agent:
         raise HTTPException(status_code=503, detail="Agent not initialized")
     return agent.get_status()
+
 
 
 def parse_args():

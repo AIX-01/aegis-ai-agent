@@ -52,7 +52,7 @@ class ReportGeneratorService:
                 - risk_level: 위험 등급
                 - risk_score: 위험 점수
                 - summary: 상황 요약
-                - actions: 대응 조치 리스트 [{"type": str, "description": str}, ...]
+                - actions: 대응 조치 리스트 [{"action": str, "description": str, "user_id": str | None}, ...]
             frames: CCTV 캡처 이미지 리스트 (JPEG bytes, 최대 8장)
             formats: 생성할 형식 리스트 (기본값: ["html", "pdf", "docx", "pptx"])
 

@@ -25,7 +25,7 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
     카메라 위치, 발생 시각, 이벤트 유형 등으로도 검색이 가능합니다.
 
     Args:
-        state: 현재 분석 상태 (event_id, summary, event_type, risk_score 등)
+        state: 현재 분석 상태 (event_id, summary, event_type, risk_score, actions 등)
         config: 시스템 설정
 
     Returns:
@@ -40,6 +40,14 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
     risk_score = state.get("risk_score", 0.0)
     risk_level = state.get("risk_level", "ABNORMAL")
     occurred_at = state.get("occurred_at")
+
+    # =========================================
+    # [추가] response_agent에서 생성된 대응 조치 가져오기
+    # =========================================
+    # actions는 response_agent의 extract_actions 노드에서 생성됨
+    # 형식: [{"action": str, "description": str, "user_id": str | None}, ...]
+    # 백엔드 event_actions 테이블과 동일한 구조
+    actions = state.get("actions", [])
 
     logger.info(f"[{camera_uuid}] 이벤트 임베딩 저장 시작... (Event ID: {event_id})")
 
@@ -62,8 +70,22 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
         # =========================================
         # 임베딩용 텍스트 구성
         # =========================================
-        # 이 텍스트가 OpenAI Embedding API를 통해 1536차원 벡터로 변환되어
-        # Qdrant의 'vector' 필드에 저장됩니다.
+        # [핵심 개념]
+        # 모든 데이터를 임베딩하지 않고, 검색에 필요한 핵심 데이터만 선별하여
+        # 하나의 텍스트(text_to_embed)로 구성합니다.
+        # 이 텍스트만 OpenAI Embedding API를 통해 벡터로 변환됩니다.
+        #
+        # [선별 기준]
+        # - 유사도 검색에 영향을 주어야 하는 필드만 포함
+        # - summary: 상황 설명 (가장 중요)
+        # - camera_name, camera_location: 위치 정보
+        # - event_type: 이벤트 유형
+        #
+        # [제외된 데이터]
+        # - event_id, camera_uuid: 식별자 (검색 의미 없음)
+        # - risk_score, risk_level: 숫자/코드값 (필터링으로 처리)
+        # - occurred_at: 시간 (필터링으로 처리)
+        # - actions: 대응 조치 (payload에만 저장, 결과 표시용)
         #
         # [임베딩 흐름]
         # text_to_embed (문자열)
@@ -126,7 +148,29 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
             "risk_score": risk_score,
             "summary": summary,
             "occurred_at": occurred_at.isoformat() if occurred_at else None,
+            # =========================================
+            # [추가] 시간대/요일 패턴 분석용 필드
+            # =========================================
+            # occurred_at에서 추출하여 별도 저장
+            # Qdrant 필터링 시 바로 사용 가능 (파싱 불필요)
+            #
+            # 활용:
+            # - 시간대별 패턴: "22:00~02:00에 집중 발생"
+            # - 요일별 패턴: "금요일~토요일에 집중 발생"
+            "hour_of_day": occurred_at.hour if occurred_at else None,      # 0~23 (발생 시간)
+            "day_of_week": occurred_at.weekday() if occurred_at else None, # 0=월, 6=일
             "text_embedded": text_to_embed,       # 임베딩된 원본 텍스트 (기록용)
+            # =========================================
+            # [추가] 대응 조치 정보 (시나리오 1, 2 활용)
+            # =========================================
+            # response_agent에서 생성된 대응 조치 리스트
+            # 형식: [{"action": str, "description": str, "user_id": str | None}, ...]
+            # 백엔드 event_actions 테이블과 동일한 구조
+            #
+            # 활용:
+            # - 시나리오 1: 유사 상황에서 어떤 대응을 했는지 참조
+            # - 시나리오 2: 장소별 대응 이력 패턴 분석
+            "actions": actions,
         }
 
         # 문서 추가
@@ -138,7 +182,7 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
             text_field="text_embedded"
         )
 
-        logger.info(f"[{camera_uuid}] 이벤트 임베딩 저장 완료 (Event ID: {event_id})")
+        logger.info(f"[{camera_uuid}] 이벤트 임베딩 저장 완료 (Event ID: {event_id}, Actions: {len(actions)}개)")
         return {"embedding_stored": True}
 
     except Exception as e:

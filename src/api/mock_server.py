@@ -63,9 +63,19 @@ class EventCreationResponse(BaseModel):
     event_id: str
 
 class EventUpdateRequest(BaseModel):
-    """이벤트 갱신 요청 (백엔드 API 스펙)"""
-    report: Optional[str] = None      # 보고서 내용 (마크다운 문자열)
-    status: Optional[str] = None      # 상태 (analyzed)
+    """
+    이벤트 갱신 요청 모델
+
+    [API 엔드포인트]
+    PATCH /internal/agent/events/{eventId}
+
+    모든 필드는 optional이며, 업데이트할 값만 전달합니다.
+    """
+    risk: Optional[str] = None      # normal | suspicious | abnormal
+    type: Optional[str] = None      # assault | burglary | dump | swoon | vandalism
+    summary: Optional[str] = None   # AI 분석 요약
+    report: Optional[str] = None    # 상세 보고서 내용 (문자열)
+    status: Optional[str] = None    # processing | analyzed
 
 class ReportUploadRequest(BaseModel):
     """보고서 업로드 요청 (클립과 동일한 방식)"""
@@ -195,17 +205,34 @@ class MockBackendServer:
             self.logger.info(f"  - 데이터: risk='{payload.risk}', type='{payload.type}', occurred_at='{payload.occurred_at}'")
             return EventCreationResponse(event_id=event_id)
 
-        # 2차 분석: 이벤트 갱신
+        # 2차 분석: 이벤트 갱신 (통합 API)
         @self.app.patch("/api/vlm-results/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
         async def update_event(event_id: str, payload: EventUpdateRequest):
+            """
+            이벤트 갱신 API (분석 결과 + 보고서 + 상태 통합)
+
+            PATCH /internal/agent/events/{eventId}
+
+            Request Body (모두 optional, 업데이트할 값만 전달):
+            - risk: normal | suspicious | abnormal
+            - type: assault | burglary | dump | swoon | vandalism
+            - summary: AI 분석 요약
+            - report: 상세 보고서 내용 (문자열)
+            - status: processing | analyzed
+            """
             self.logger.info(f"[백엔드 갱신] 이벤트 갱신 수신 (Event ID: {event_id})")
 
-            # 보고서 내용 출력
+            # 업데이트된 필드만 출력
+            if payload.risk:
+                self.logger.info(f"  - risk: {payload.risk}")
+            if payload.type:
+                self.logger.info(f"  - type: {payload.type}")
+            if payload.summary:
+                summary_preview = payload.summary[:100] if len(payload.summary) > 100 else payload.summary
+                self.logger.info(f"  - summary: {summary_preview}...")
             if payload.report:
                 report_preview = payload.report[:200].replace("\n", " ") if len(payload.report) > 200 else payload.report.replace("\n", " ")
                 self.logger.info(f"  - report: {report_preview}...")
-
-            # 상태 출력
             if payload.status:
                 self.logger.info(f"  - status: {payload.status}")
 
