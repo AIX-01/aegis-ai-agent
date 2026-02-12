@@ -206,6 +206,18 @@ def search_knowledge_node(state: ResponseAgentState, config: Config) -> Dict[str
                     knowledge_text += f"- 카메라: {payload.get('camera_name', '')} ({payload.get('camera_location', '')})\n"
                     knowledge_text += f"- 이벤트: {payload.get('event_type', '')}\n"
                     knowledge_text += f"- 발생시각: {payload.get('occurred_at', '')}\n"
+
+                    # =========================================
+                    # [추가] 시간대/요일 패턴 표시
+                    # =========================================
+                    # LLM이 시간대 및 요일 패턴을 분석할 수 있도록 표시
+                    hour = payload.get('hour_of_day')
+                    day = payload.get('day_of_week')
+                    day_names = ['월', '화', '수', '목', '금', '토', '일']
+                    if hour is not None:
+                        day_str = f" ({day_names[day]}요일)" if day is not None else ""
+                        knowledge_text += f"- 발생 시간대: {hour}시{day_str}\n"
+
                     knowledge_text += f"- 상황: {payload.get('summary', '')}\n"
 
                     # =========================================
@@ -326,6 +338,56 @@ def create_agent_node(config: Config, tools: list):
     - 인명 관련 사건(SWOON, ASSAULT)은 반드시 긴급 신고를 수행하세요.
     - 현장 조치와 신고를 병행할 수 있습니다.
     - 참조 정보(매뉴얼, 과거 사례)를 반드시 확인하고 결정하세요.
+    
+    ## 응답 형식 (중요)
+    도구를 호출하기 전에 반드시 다음 형식으로 판단 근거를 설명하세요:
+    
+    ```
+    ### 과거 사례 분석
+    - 유사 사례: [N]건 발견
+    - 과거 대응 조치: [조치명] [N]회 ([비율]%)
+    - 시간대 패턴: [N]시~[N]시에 [N]건 발생
+    - 요일 패턴: [요일]에 [N]건 발생
+    - 장소 패턴: [장소명]에서 반복 발생 여부
+    
+    ### 판단 근거
+    [과거 사례와 매뉴얼을 참고하여 선택 이유 1~2문장으로 설명]
+    
+    ### 선택한 조치
+    1. [조치명] - [이유]
+    2. [조치명] - [이유] (있는 경우)
+    ```
+    
+    ### 과거 사례가 있는 경우 예시:
+    ```
+    ### 과거 사례 분석
+    - 유사 사례: 3건 발견
+    - 과거 대응 조치: 현장 방송 경고 2회 (67%), 영상 보존만 1회 (33%)
+    - 시간대 패턴: 22시~02시에 3건 발생 (야간 집중)
+    - 요일 패턴: 월요일 2건, 토요일 1건
+    - 장소 패턴: 후문 CCTV에서 반복 발생 중
+    
+    ### 판단 근거
+    과거 사례에서 현장 방송 경고가 67% 사용되었고, 매뉴얼에서도 DUMP 상황에서 현장 방송을 권장합니다.
+    야간 시간대(22시~02시)에 집중 발생하므로 즉각 대응이 필요합니다.
+    
+    ### 선택한 조치
+    1. 현장 방송 경고 - 무단투기 중단 및 경고 메시지 전달
+    ```
+    
+    ### 과거 사례가 없는 경우 예시:
+    ```
+    ### 과거 사례 분석
+    - 유사 사례: 0건 (과거 사례 없음)
+    - 참고: 대응 매뉴얼 기준으로 판단
+    
+    ### 판단 근거
+    과거 유사 사례가 없어 대응 매뉴얼을 기준으로 판단합니다.
+    DUMP(무단투기) 매뉴얼에 따라 현장 방송 경고를 실행합니다.
+    
+    ### 선택한 조치
+    1. 현장 방송 경고 - 매뉴얼 권장 조치
+    ```
     """
 
     def agent_node(state: ResponseAgentState) -> Dict[str, Any]:
@@ -338,17 +400,17 @@ def create_agent_node(config: Config, tools: list):
             knowledge_context = state.get("knowledge_context", "")
 
             context = f"""## 현재 상황
-- 카메라: {state.get('camera_name', '')} ({state.get('camera_location', '')})
-- 카메라 ID: {state.get('camera_id', '')}
-- 이벤트 유형: {state.get('event_type', '')}
-- 위험도: {state.get('risk_level', '')} (점수: {state.get('risk_score', 0)})
-- 상황 요약: {state.get('summary', '')}
-- 발생 시각: {state.get('occurred_at', '')}
-
-## 참조 정보 (대응 매뉴얼 및 과거 사례)
-{knowledge_context}
-
-위 정보를 참고하여 적절한 대응 조치를 결정해주세요."""
+            - 카메라: {state.get('camera_name', '')} ({state.get('camera_location', '')})
+            - 카메라 ID: {state.get('camera_id', '')}
+            - 이벤트 유형: {state.get('event_type', '')}
+            - 위험도: {state.get('risk_level', '')} (점수: {state.get('risk_score', 0)})
+            - 상황 요약: {state.get('summary', '')}
+            - 발생 시각: {state.get('occurred_at', '')}
+            
+            ## 참조 정보 (대응 매뉴얼 및 과거 사례)
+            {knowledge_context}
+            
+            위 정보를 참고하여 적절한 대응 조치를 결정해주세요."""
 
             messages = [
                 SystemMessage(content=system_prompt),

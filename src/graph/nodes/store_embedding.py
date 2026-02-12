@@ -148,6 +148,17 @@ def store_embedding_node(state: AnalysisState, config: Config) -> Dict[str, Any]
             "risk_score": risk_score,
             "summary": summary,
             "occurred_at": occurred_at.isoformat() if occurred_at else None,
+            # =========================================
+            # [추가] 시간대/요일 패턴 분석용 필드
+            # =========================================
+            # occurred_at에서 추출하여 별도 저장
+            # Qdrant 필터링 시 바로 사용 가능 (파싱 불필요)
+            #
+            # 활용:
+            # - 시간대별 패턴: "22:00~02:00에 집중 발생"
+            # - 요일별 패턴: "금요일~토요일에 집중 발생"
+            "hour_of_day": occurred_at.hour if occurred_at else None,      # 0~23 (발생 시간)
+            "day_of_week": occurred_at.weekday() if occurred_at else None, # 0=월, 6=일
             "text_embedded": text_to_embed,       # 임베딩된 원본 텍스트 (기록용)
             # =========================================
             # [추가] 대응 조치 정보 (시나리오 1, 2 활용)
