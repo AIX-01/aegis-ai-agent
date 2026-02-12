@@ -31,6 +31,95 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# =========================================
+# execute_field_action 실제 로직 (분리된 구현)
+# =========================================
+# skip_emergency_call_node에서도 호출 가능하도록 분리
+# @tool 데코레이터 함수는 직접 호출이 어려우므로 로직을 별도 함수로 분리
+def execute_field_action_impl(action_name: str, camera_id: str, message_content: str = None) -> str:
+    """
+    execute_field_action의 실제 구현 로직
+
+    ToolNode의 @tool 함수와 skip_emergency_call_node에서 모두 호출됩니다.
+    - @tool execute_field_action: 정상 흐름에서 ToolNode가 호출
+    - skip_emergency_call_node: emergency_call 거부 시에도 execute_field_action은 실행해야 함
+
+    Args:
+        action_name: 실행할 액션 (BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN)
+        camera_id: 대상 카메라 ID
+        message_content: 방송 메시지 (BROADCAST 시 필수)
+
+    Returns:
+        실행 결과 문자열
+    """
+    logger.info(f"[execute_field_action_impl] 호출: action={action_name}, camera={camera_id}, message={message_content}")
+
+    # =========================================
+    # Mock 응답 - 실제 구현 시 장비 제어 API 호출
+    # =========================================
+    # 실제 환경에서는 VMS(Video Management System) 또는
+    # IoT 장비 제어 API를 호출하여 물리적 조치를 수행합니다.
+    #
+    # [LLM 참고용]
+    # Mock 응답을 상세히 작성하면 LLM이 다음 행동 결정 시 참고합니다.
+    # 예: "방송 완료 → 추가 조치 필요 여부 판단"
+    # =========================================
+
+    # 액션별 상세 응답 구성
+    action_details = {
+        "BROADCAST": {
+            "description": "CCTV 스피커를 통한 음성 방송",
+            "effect": "현장 인원에게 경고 메시지 전달 완료",
+            "next_step": "대상자 반응 확인 필요, 반응 없을 시 추가 조치 고려",
+            "coverage": "반경 50m 이내 청취 가능"
+        },
+        "LIGHT_ON": {
+            "description": "현장 조명 점등",
+            "effect": "해당 구역 조명 활성화 완료",
+            "next_step": "야간 시인성 확보됨, CCTV 영상 품질 향상",
+            "coverage": "해당 카메라 촬영 범위 전체"
+        },
+        "PTZ_TRACK": {
+            "description": "PTZ 카메라 대상 추적 모드",
+            "effect": "대상 자동 추적 시작",
+            "next_step": "대상 이동 경로 기록 중, 도주 시 경로 추적 가능",
+            "coverage": "카메라 회전 범위 내 자동 추적"
+        },
+        "SIREN": {
+            "description": "경고 사이렌 작동",
+            "effect": "경고음 발생 중 (90dB)",
+            "next_step": "주변 인원 주의 환기됨, 30초 후 자동 종료",
+            "coverage": "반경 100m 이내 청취 가능"
+        }
+    }
+
+    action_info = action_details.get(action_name, {
+        "description": f"{action_name} 실행",
+        "effect": "조치 완료",
+        "next_step": "상황 모니터링 필요",
+        "coverage": "해당 카메라 범위"
+    })
+
+    result = f"""## 현장 조치 실행 결과
+
+- 액션: {action_name}
+- 설명: {action_info['description']}
+- 대상 카메라: {camera_id}
+- 실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- 상태: ✅ 성공
+
+### 실행 효과
+- {action_info['effect']}
+- 적용 범위: {action_info['coverage']}
+{f'- 방송 내용: "{message_content}"' if message_content else ''}
+
+### 권장 후속 조치
+- {action_info['next_step']}
+"""
+
+    return result
+
+
 def create_response_tools(config: "Config"):
     """
     대응 에이전트가 사용할 도구들을 생성합니다.
@@ -75,72 +164,9 @@ def create_response_tools(config: "Config"):
         Returns:
             실행 성공 여부
         """
-        logger.info(f"[Tool] execute_field_action 호출: action={action_name}, camera={camera_id}, message={message_content}")
-
-        # =========================================
-        # Mock 응답 - 실제 구현 시 장비 제어 API 호출
-        # =========================================
-        # 실제 환경에서는 VMS(Video Management System) 또는
-        # IoT 장비 제어 API를 호출하여 물리적 조치를 수행합니다.
-        #
-        # [LLM 참고용]
-        # Mock 응답을 상세히 작성하면 LLM이 다음 행동 결정 시 참고합니다.
-        # 예: "방송 완료 → 추가 조치 필요 여부 판단"
-        # =========================================
-
-        # 액션별 상세 응답 구성
-        action_details = {
-            "BROADCAST": {
-                "description": "CCTV 스피커를 통한 음성 방송",
-                "effect": "현장 인원에게 경고 메시지 전달 완료",
-                "next_step": "대상자 반응 확인 필요, 반응 없을 시 추가 조치 고려",
-                "coverage": "반경 50m 이내 청취 가능"
-            },
-            "LIGHT_ON": {
-                "description": "현장 조명 점등",
-                "effect": "해당 구역 조명 활성화 완료",
-                "next_step": "야간 시인성 확보됨, CCTV 영상 품질 향상",
-                "coverage": "해당 카메라 촬영 범위 전체"
-            },
-            "PTZ_TRACK": {
-                "description": "PTZ 카메라 대상 추적 모드",
-                "effect": "대상 자동 추적 시작",
-                "next_step": "대상 이동 경로 기록 중, 도주 시 경로 추적 가능",
-                "coverage": "카메라 회전 범위 내 자동 추적"
-            },
-            "SIREN": {
-                "description": "경고 사이렌 작동",
-                "effect": "경고음 발생 중 (90dB)",
-                "next_step": "주변 인원 주의 환기됨, 30초 후 자동 종료",
-                "coverage": "반경 100m 이내 청취 가능"
-            }
-        }
-
-        action_info = action_details.get(action_name, {
-            "description": f"{action_name} 실행",
-            "effect": "조치 완료",
-            "next_step": "상황 모니터링 필요",
-            "coverage": "해당 카메라 범위"
-        })
-
-        mock_response = f"""## 현장 조치 실행 결과
-
-        - 액션: {action_name}
-        - 설명: {action_info['description']}
-        - 대상 카메라: {camera_id}
-        - 실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        - 상태: ✅ 성공
-        
-        ### 실행 효과
-        - {action_info['effect']}
-        - 적용 범위: {action_info['coverage']}
-        {f'- 방송 내용: "{message_content}"' if message_content else ''}
-        
-        ### 권장 후속 조치
-        - {action_info['next_step']}
-        """
-
-        return mock_response
+        # 실제 로직은 execute_field_action_impl에서 처리
+        # 분리된 이유: skip_emergency_call_node에서도 동일한 로직을 재사용하기 위함
+        return execute_field_action_impl(action_name, camera_id, message_content)
 
     @tool
     def emergency_call(agency_type: str, situation_report: str) -> str:

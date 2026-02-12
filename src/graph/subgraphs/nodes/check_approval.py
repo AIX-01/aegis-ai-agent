@@ -186,8 +186,6 @@ def skip_emergency_call_node(state: "ResponseAgentState") -> Dict[str, Any]:
     Returns:
         업데이트된 상태 (messages에 모든 도구에 대한 응답 추가)
     """
-    from datetime import datetime
-
     messages = state.get("messages", [])
     if not messages:
         return {}
@@ -220,23 +218,31 @@ def skip_emergency_call_node(state: "ResponseAgentState") -> Dict[str, Any]:
                 logger.info(f"[skip_emergency_call] emergency_call 스킵됨 (status: {status})")
 
             elif tool_name == "execute_field_action":
-                # field_action은 직접 실행 (Mock 응답)
+                # =========================================
+                # field_action은 실제 로직을 호출하여 실행
+                # =========================================
+                # execute_field_action_impl: response_tools.py에서 분리된 실제 구현
+                # 분리 이유: @tool 데코레이터 함수는 직접 호출이 어려움
+                # emergency_call 거부 시에도 execute_field_action은 정상 실행되어야 함
+                from src.tools.response_tools import execute_field_action_impl
+
                 action_name = tool_args.get("action_name", tool_args.get("action", "UNKNOWN"))
                 message_content = tool_args.get("message_content", tool_args.get("message", ""))
+                # camera_id: tool_args에서 먼저 확인, 없으면 state에서 가져옴
+                target_camera_id = tool_args.get("camera_id", camera_id)
 
-                result = f"""## 현장 조치 실행 결과
+                # 실제 execute_field_action 로직 실행
+                result = execute_field_action_impl(
+                    action_name=action_name,
+                    camera_id=target_camera_id,
+                    message_content=message_content
+                )
 
-- 액션: {action_name}
-- 대상 카메라: {camera_id}
-- 실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- 상태: ✅ 성공
-{f'- 방송 내용: "{message_content}"' if message_content else ''}
-"""
                 new_messages.append(ToolMessage(
                     content=result,
                     tool_call_id=tool_call_id,
                 ))
-                logger.info(f"[skip_emergency_call] execute_field_action 실행됨: {action_name}")
+                logger.info(f"[skip_emergency_call] execute_field_action 실제 실행: action={action_name}, camera={target_camera_id}")
 
             else:
                 # 알 수 없는 도구 - 에러 메시지 (OpenAI API 요구사항 충족)
