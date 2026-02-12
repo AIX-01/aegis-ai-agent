@@ -47,6 +47,7 @@ class ResponseAgentState(TypedDict):
     summary: str
     occurred_at: datetime
     frames: List[bytes]  # [추가] CCTV 캡처 이미지 (보고서 생성용)
+    frame_timestamps: List[datetime]  # [추가] 각 프레임의 타임스탬프
 
     # 에이전트 실행 중 생성
     messages: Annotated[Sequence[BaseMessage], lambda x, y: x + y]
@@ -229,6 +230,7 @@ def generate_report_node(state: ResponseAgentState, app_config: Config) -> Dict[
     occurred_at = state.get("occurred_at", "")
     actions = state.get("actions", [])
     frames = state.get("frames", [])
+    frame_timestamps = state.get("frame_timestamps", [])  # 타임스탬프 추가
     event_id = state.get("event_id", "")
 
     # 위험 점수 포맷팅
@@ -269,6 +271,7 @@ def generate_report_node(state: ResponseAgentState, app_config: Config) -> Dict[
         report_generator = ReportGeneratorService()
 
         report_data = {
+            "event_id": event_id,
             "occurred_at": occurred_at,
             "event_type": event_type,
             "camera_name": camera_name,
@@ -276,7 +279,9 @@ def generate_report_node(state: ResponseAgentState, app_config: Config) -> Dict[
             "risk_level": risk_level,
             "risk_score": risk_score,
             "summary": summary,
+            "status": "ANALYZED",
             "actions": actions,
+            "frame_timestamps": frame_timestamps,  # 타임스탬프 추가
         }
 
         generated_files = report_generator.generate(
@@ -287,38 +292,60 @@ def generate_report_node(state: ResponseAgentState, app_config: Config) -> Dict[
 
         logger.info(f"보고서 파일 생성 완료: PDF={generated_files.get('pdf') is not None}, DOCX={generated_files.get('docx') is not None}, PPTX={generated_files.get('pptx') is not None}")
 
-        # 2. 보고서 파일 업로드 (Mock 서버 또는 MinIO)
+        # 2-1. 로컬 디렉토리에 파일 저장
         if event_id:
-            backend_client = BackendClient(app_config)
+            from pathlib import Path
 
-            # 업로드할 파일들과 Content-Type 매핑
-            content_types = {
-                "pdf": "application/pdf",
-                "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            }
+            # Real Backend 사용 시: reports/, Mock 사용 시: mock_reports/
+            if app_config.real_backend:
+                reports_dir = Path(__file__).resolve().parent.parent.parent / "reports" / event_id
+            else:
+                reports_dir = Path(__file__).resolve().parent.parent.parent / "mock_reports" / event_id
+
+            reports_dir.mkdir(parents=True, exist_ok=True)
 
             for fmt, file_bytes in generated_files.items():
-                if file_bytes and fmt in content_types:
+                if file_bytes:
+                    file_path = reports_dir / f"report.{fmt}"
                     try:
-                        # presigned URL 획득
-                        url_info = backend_client.get_report_upload_url(event_id, fmt)
-                        if url_info:
-                            upload_url = url_info.get("upload_url")
-                            report_path = url_info.get("report_path")
-
-                            # 파일 업로드
-                            if backend_client.upload_report(upload_url, file_bytes, content_types[fmt]):
-                                file_urls[fmt] = report_path
-                                logger.info(f"✅ [{event_id}] {fmt.upper()} 보고서 업로드 완료: {report_path}")
-                            else:
-                                logger.error(f"❌ [{event_id}] {fmt.upper()} 보고서 업로드 실패")
-                        else:
-                            logger.error(f"❌ [{event_id}] {fmt.upper()} 업로드 URL 획득 실패")
+                        with open(file_path, "wb") as f:
+                            f.write(file_bytes)
+                        logger.info(f"📁 [{event_id}] {fmt.upper()} 로컬 저장: {file_path}")
                     except Exception as e:
-                        logger.error(f"❌ [{event_id}] {fmt.upper()} 보고서 업로드 중 오류: {e}")
-        else:
-            logger.warning("event_id가 없어 보고서 업로드를 건너뜁니다.")
+                        logger.error(f"❌ [{event_id}] {fmt.upper()} 로컬 저장 실패: {e}")
+
+        # # 2-2. 보고서 파일 업로드 (S3/MinIO) - 주석 처리
+        # if event_id:
+        #     backend_client = BackendClient(app_config)
+
+        #     # 업로드할 파일들과 Content-Type 매핑
+        #     content_types = {
+        #         "pdf": "application/pdf",
+        #         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        #         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        #     }
+
+        #     for fmt, file_bytes in generated_files.items():
+        #         if file_bytes and fmt in content_types:
+        #             try:
+        #                 # presigned URL 획득
+        #                 url_info = backend_client.get_report_upload_url(event_id, fmt)
+        #                 if url_info:
+        #                     upload_url = url_info.get("upload_url")
+        #                     report_path = url_info.get("report_path")
+
+        #                     # 파일 업로드
+        #                     if backend_client.upload_report(upload_url, file_bytes, content_types[fmt]):
+        #                         file_urls[fmt] = report_path
+        #                         logger.info(f"☁️  [{event_id}] {fmt.upper()} S3 업로드 완료: {report_path}")
+        #                     else:
+        #                         logger.error(f"❌ [{event_id}] {fmt.upper()} S3 업로드 실패")
+        #                 else:
+        #                     logger.error(f"❌ [{event_id}] {fmt.upper()} 업로드 URL 획득 실패")
+        #             except Exception as e:
+        #                 logger.error(f"❌ [{event_id}] {fmt.upper()} S3 업로드 중 오류: {e}")
+        # else:
+        #     logger.warning("event_id가 없어 보고서 업로드를 건너뜁니다.")
 
     except Exception as e:
         logger.error(f"보고서 파일 생성/업로드 실패: {e}", exc_info=True)
@@ -460,6 +487,7 @@ def response_agent_node(state: AnalysisState, config: Config) -> Dict[str, Any]:
             "summary": state.get("summary", ""),
             "occurred_at": state.get("occurred_at"),
             "frames": state.get("frames", []),  # [추가] 보고서 이미지용
+            "frame_timestamps": state.get("frame_timestamps", []),  # [추가] 타임스탬프
             "messages": [],
             "actions": [],
             "rag_references": [],

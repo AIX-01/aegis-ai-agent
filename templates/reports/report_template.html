@@ -16,7 +16,6 @@
     .section-title { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 10px; padding-left: 10px; border-left: 3px solid #3b82f6; }
     .section-title.green { border-left-color: #10b981; }
     .section-title.orange { border-left-color: #f59e0b; }
-    .section-title.purple { border-left-color: #8b5cf6; }
     .info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
     .info-item { background: #f9fafb; padding: 10px; border-radius: 6px; }
     .info-label { font-size: 11px; color: #6b7280; margin-bottom: 3px; }
@@ -26,12 +25,10 @@
     .action-item { background: #fffbeb; border-left: 3px solid #f59e0b; padding: 10px 12px; margin-bottom: 6px; border-radius: 0 6px 6px 0; }
     .action-step { font-weight: 600; color: #92400e; margin-bottom: 3px; font-size: 13px; }
     .action-desc { font-size: 12px; color: #78350f; line-height: 1.5; }
-    .rag-item { background: #f5f3ff; border-left: 3px solid #8b5cf6; padding: 10px 12px; margin-bottom: 6px; border-radius: 0 6px 6px 0; }
-    .rag-header { margin-bottom: 4px; font-size: 13px; }
-    .rag-header strong { color: #5b21b6; }
-    .rag-score { float: right; background: #e9d5ff; padding: 2px 6px; border-radius: 4px; font-size: 10px; color: #6b21a8; }
-    .rag-content { font-size: 12px; color: #6b21a8; line-height: 1.5; clear: both; }
-    .rag-source { font-size: 10px; color: #9ca3af; margin-top: 4px; }
+    .action-header { font-weight: 600; color: #92400e; margin-bottom: 3px; font-size: 13px; }
+    .action-content { font-size: 12px; color: #78350f; line-height: 1.5; }
+    .actions-list { margin-top: 8px; }
+    .no-actions { color: #6b7280; text-align: center; padding: 16px; font-size: 12px; background: #f9fafb; border-radius: 4px; }
     .risk-high { color: #dc2626; }
     .risk-warning { color: #d97706; }
     .no-data { color: #6b7280; text-align: center; padding: 16px; font-size: 12px; }
@@ -39,6 +36,7 @@
     .frame-item { background: #f9fafb; border-radius: 6px; overflow: hidden; text-align: center; }
     .frame-item img { width: 100%; height: auto; display: block; }
     .frame-label { font-size: 10px; color: #6b7280; padding: 4px 0; }
+    .no-frames { color: #9ca3af; text-align: center; padding: 20px; font-size: 11px; background: #f9fafb; border-radius: 4px; }
     .footer { margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5e7eb; text-align: center; font-size: 11px; color: #9ca3af; }
   </style>
 </head>
@@ -78,7 +76,7 @@
           </div>
           <div class="info-item">
             <div class="info-label">위험도 점수</div>
-            <div class="info-value risk-high">{{risk_score_percent}}</div>
+            <div class="info-value {{risk_class}}">{{risk_score_percent}}</div>
           </div>
           <div class="info-item">
             <div class="info-label">분석 상태</div>
@@ -95,27 +93,22 @@
       </div>
 
       <div class="section">
-        <h2 class="section-title">캡처 프레임</h2>
-        <div class="frames-grid">
-          {{frames}}
-        </div>
+        <h2 class="section-title">시간 별 상황</h2>
+        {{frames}}
       </div>
 
       <div class="section">
         <h2 class="section-title orange">권장 대응 절차</h2>
-        {{recommended_actions}}
+        <div class="actions-list">
+          {{actions}}
+        </div>
       </div>
 
-      <div class="section">
-        <h2 class="section-title purple">유사 사례 참조</h2>
-        {{rag_references}}
+      <div class="footer">
+        <p>AEGIS AI 관제 시스템 | 본 보고서는 AI에 의해 자동 생성되었습니다.</p>
+        <p>버전: {{version}}</p>
       </div>
-    </div>
-    <div class="footer">
-      <p>AEGIS AI 관제 시스템 | 본 보고서는 AI에 의해 자동 생성되었습니다.</p>
-      <p>버전: {{version}}</p>
     </div>
   </div>
 </body>
 </html>
-
