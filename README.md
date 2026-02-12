@@ -1318,6 +1318,7 @@ graph TD
 - `src/graph/subgraphs/response_agent.py`: `search_knowledge_node()` 추가, 워크플로우 수정
 - `src/tools/response_tools.py`: `search_protocol_and_cases` 도구 제거
 
+<<<<<<< HEAD
 ---
 
 ### 2026-02-12
