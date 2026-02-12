@@ -174,34 +174,26 @@ def skip_emergency_call_node(state: "ResponseAgentState") -> Dict[str, Any]:
     emergency_call 도구 호출을 스킵하고 ToolMessage를 생성합니다.
 
     LLM이 emergency_call을 호출했지만 사용자가 거부한 경우,
-    emergency_call은 "사용자가 거부함" 메시지를 반환하고,
-    다른 도구(field_action 등)는 실행하여 결과를 반환합니다.
-
-    [중요] OpenAI API는 모든 tool_call_id에 대한 ToolMessage가 있어야 합니다.
-    emergency_call만 스킵하고 다른 도구는 실행하지 않으면 오류가 발생합니다.
+    도구 실행 없이 "사용자가 거부함" 메시지를 반환합니다.
 
     Args:
         state: 현재 에이전트 상태
 
     Returns:
-        업데이트된 상태 (messages에 모든 도구에 대한 응답 추가)
+        업데이트된 상태 (messages에 스킵 메시지 추가)
     """
-    from datetime import datetime
-
     messages = state.get("messages", [])
     if not messages:
         return {}
 
     last_message = messages[-1]
     new_messages = []
-    camera_id = state.get("camera_id", "")
 
-    # 도구 호출 처리 - 모든 tool_call에 대해 ToolMessage 생성 필요
+    # 도구 호출 처리
     if hasattr(last_message, "tool_calls"):
         for tool_call in last_message.tool_calls:
             tool_name = tool_call.get("name", "")
             tool_call_id = tool_call.get("id", "")
-            tool_args = tool_call.get("args", {})
 
             if tool_name == "emergency_call":
                 # emergency_call은 스킵 - 거부 메시지 생성
@@ -218,33 +210,10 @@ def skip_emergency_call_node(state: "ResponseAgentState") -> Dict[str, Any]:
                     tool_call_id=tool_call_id,
                 ))
                 logger.info(f"[skip_emergency_call] emergency_call 스킵됨 (status: {status})")
-
-            elif tool_name == "execute_field_action":
-                # field_action은 직접 실행 (Mock 응답)
-                action_name = tool_args.get("action_name", tool_args.get("action", "UNKNOWN"))
-                message_content = tool_args.get("message_content", tool_args.get("message", ""))
-
-                result = f"""## 현장 조치 실행 결과
-
-- 액션: {action_name}
-- 대상 카메라: {camera_id}
-- 실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- 상태: ✅ 성공
-{f'- 방송 내용: "{message_content}"' if message_content else ''}
-"""
-                new_messages.append(ToolMessage(
-                    content=result,
-                    tool_call_id=tool_call_id,
-                ))
-                logger.info(f"[skip_emergency_call] execute_field_action 실행됨: {action_name}")
-
             else:
-                # 알 수 없는 도구 - 에러 메시지
-                new_messages.append(ToolMessage(
-                    content=f"❌ 알 수 없는 도구: {tool_name}",
-                    tool_call_id=tool_call_id,
-                ))
-                logger.warning(f"[skip_emergency_call] 알 수 없는 도구: {tool_name}")
+                # 다른 도구 (field_action)는 실행해야 함 - 여기서는 처리하지 않음
+                # tools 노드에서 처리됨
+                pass
 
     return {"messages": new_messages}
 

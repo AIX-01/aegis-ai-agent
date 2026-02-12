@@ -172,8 +172,10 @@ def _generate_actions_html(actions: list) -> str:
     """
     대응 조치 목록을 HTML로 변환합니다.
 
-    형식: [조치명] - [description]
-          💡 이유: [reason]
+    형식:
+        [조치명]
+        [description]
+        💡 이유: [reason]
 
     Args:
         actions: 대응 조치 리스트

@@ -181,42 +181,132 @@ def _extract_reasoning(content: str) -> str:
 
 def _extract_action_reasons(content: str) -> Dict[str, str]:
     """
-    LLM 응답에서 '### 선택한 조치' 섹션의 조치별 이유를 추출합니다.
+    LLM 응답에서 '### 선택한 조치' 섹션의 조치별 상세 판단 근거를 추출합니다.
 
-    예시 입력:
+    [추출 형식]
     ### 선택한 조치
     1. 현장 방송 경고 - 무단투기 중단 및 경고 메시지 전달
     2. 112 신고 - 폭행 현행범 신고 및 가해자 검거 요청
+
+    [판단 근거 포함 시]
+    ### 판단 근거, ### 법적 근거 등에서 관련 내용을 함께 추출하여
+    더 상세한 reason을 생성합니다.
 
     Args:
         content: LLM 응답 텍스트
 
     Returns:
-        {"현장 방송 경고": "무단투기 중단 및 경고 메시지 전달", ...}
+        {"현장 방송 경고": "상세 판단 근거", ...}
     """
     if not content:
         return {}
 
     reasons = {}
 
-    # ### 선택한 조치 섹션 추출
+    # 1. ### 선택한 조치 섹션에서 기본 이유 추출
     actions_match = re.search(r"### 선택한 조치\s*\n(.*?)(?=###|\Z)", content, re.DOTALL)
-    if not actions_match:
-        return {}
+    if actions_match:
+        actions_text = actions_match.group(1)
+        lines = actions_text.strip().split("\n")
+        for line in lines:
+            # "1. 현장 방송 경고 - 이유" 패턴
+            match = re.match(r"^[\d\.\-\*]\s*(.+?)\s*-\s*(.+)$", line.strip())
+            if match:
+                action_name = match.group(1).strip()
+                reason = match.group(2).strip()
+                reasons[action_name] = reason
 
-    actions_text = actions_match.group(1)
+    # 2. ### 판단 근거 섹션에서 추가 상세 내용 추출
+    decision_match = re.search(r"### 판단 근거\s*\n(.*?)(?=###|\Z)", content, re.DOTALL)
+    decision_text = decision_match.group(1).strip() if decision_match else ""
 
-    # 각 조치 라인 파싱: "1. [조치명] - [이유]" 또는 "- [조치명] - [이유]"
-    lines = actions_text.strip().split("\n")
-    for line in lines:
-        # "1. 현장 방송 경고 - 이유" 또는 "- 112 신고 - 이유" 패턴
-        match = re.match(r"^[\d\.\-\*]\s*(.+?)\s*-\s*(.+)$", line.strip())
-        if match:
-            action_name = match.group(1).strip()
-            reason = match.group(2).strip()
-            reasons[action_name] = reason
+    # 3. ### 과거 사례 분석 섹션에서 과거 사례 추출 (있을 때만)
+    case_match = re.search(r"### 과거 사례 분석\s*\n(.*?)(?=###|\Z)", content, re.DOTALL)
+    case_text = case_match.group(1).strip() if case_match else ""
+
+    # 과거 사례가 실제로 있는지 확인 (유사 사례 0건이면 없는 것으로 처리)
+    has_past_cases = case_text and "유사 사례" in case_text and "0건" not in case_text
+
+    # 4. 각 액션에 대해 상세 판단 근거 조합
+    for action_name, basic_reason in reasons.items():
+        detailed_parts = [basic_reason]
+
+        # 판단 근거에서 해당 액션 관련 내용 찾기
+        if decision_text:
+            action_keywords = _get_action_keywords(action_name)
+            for keyword in action_keywords:
+                for sentence in decision_text.split('.'):
+                    if keyword in sentence:
+                        sentence = sentence.strip()
+                        if sentence and sentence not in detailed_parts:
+                            detailed_parts.append(sentence)
+                        break
+
+        # 법적 근거 추가 (신고 관련 액션인 경우 - 템플릿 기반)
+        if any(kw in action_name for kw in ["112", "119", "신고", "경찰", "소방"]):
+            legal_basis = _get_legal_basis_template(action_name)
+            if legal_basis:
+                detailed_parts.append(legal_basis)
+
+        # 과거 사례 참조 추가 (실제 과거 사례가 있을 때만)
+        if has_past_cases:
+            case_summary = re.search(r"과거 대응[^:]*:\s*([^\n]+)", case_text)
+            if case_summary:
+                detailed_parts.append(f"과거 사례 참조: {case_summary.group(1).strip()[:50]}")
+
+        # 상세 판단 근거 조합 (최대 200자)
+        detailed_reason = " | ".join(detailed_parts)
+        if len(detailed_reason) > 200:
+            detailed_reason = detailed_reason[:197] + "..."
+
+        reasons[action_name] = detailed_reason
 
     return reasons
+
+
+def _get_legal_basis_template(action_name: str) -> str:
+    """
+    액션별 법적 근거 템플릿을 반환합니다.
+
+    Args:
+        action_name: 액션명
+
+    Returns:
+        법적 근거 문자열 (해당 없으면 빈 문자열)
+    """
+    # 112 경찰 신고 관련
+    if any(kw in action_name for kw in ["112", "경찰"]):
+        return "법적 근거: 형법 제257조(상해), 제260조(폭행), 제329조(절도)"
+
+    # 119 소방/응급 신고 관련
+    if any(kw in action_name for kw in ["119", "소방", "응급"]):
+        return "법적 근거: 응급의료에 관한 법률 제2조, 소방기본법 제16조"
+
+    # 보안팀 호출 관련
+    if any(kw in action_name for kw in ["보안팀", "보안"]):
+        return "법적 근거: 경비업법 제2조, 개인정보보호법 제25조(영상정보처리기기)"
+
+    return ""
+
+
+def _get_action_keywords(action_name: str) -> list:
+    """액션명에서 키워드 추출"""
+    keywords = []
+    if "방송" in action_name:
+        keywords.extend(["방송", "경고", "전달"])
+    if "112" in action_name or "경찰" in action_name:
+        keywords.extend(["112", "경찰", "신고", "검거"])
+    if "119" in action_name or "소방" in action_name or "응급" in action_name:
+        keywords.extend(["119", "소방", "응급", "구급"])
+    if "보안" in action_name:
+        keywords.extend(["보안", "출동"])
+    if "조명" in action_name:
+        keywords.extend(["조명", "점등"])
+    if "PTZ" in action_name or "추적" in action_name:
+        keywords.extend(["PTZ", "추적"])
+    if "사이렌" in action_name:
+        keywords.extend(["사이렌", "경보"])
+    return keywords
 
 
 def _match_action_reason(action_code: str, action_reasons: Dict[str, str]) -> str:
