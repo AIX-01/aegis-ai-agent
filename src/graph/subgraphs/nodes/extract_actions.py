@@ -2,13 +2,14 @@
 조치 정보 추출 노드 (extract_actions)
 
 메시지에서 결정된 조치들과 참조 문서를 추출합니다.
+LLM 응답에서 판단 근거(reasoning)와 조치별 이유(reason)를 파싱합니다.
 emergency_call 도구 실행 후 백엔드에 update_action API를 호출합니다.
 """
 import re
 import logging
-from typing import Dict, Any, TYPE_CHECKING
+from typing import Dict, Any, List, TYPE_CHECKING
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolMessage, AIMessage
 
 if TYPE_CHECKING:
     from ....config import Config
@@ -28,13 +29,17 @@ AGENCY_TO_ACTION = {
 
 def extract_actions(state: "ResponseAgentState", config: "Config") -> Dict[str, Any]:
     """
-    메시지에서 결정된 조치들과 참조 문서를 추출합니다.
+    메시지에서 결정된 조치들, 참조 문서, LLM 판단 근거를 추출합니다.
     emergency_call 도구 실행 후 백엔드에 update_action API를 호출합니다.
 
     [추출 정보 - 백엔드 event_actions 테이블과 일치]
     - action: TEXT - 조치 유형/코드 ("BROADCAST", "112_POLICE" 등)
     - description: TEXT - 조치에 대한 상세 설명
+    - reason: TEXT - LLM이 해당 조치를 선택한 이유
     - user_id: UUID | None - HITL 승인자 ID (시스템 자동 시 None)
+
+    [추출 정보 - 보고서용]
+    - reasoning: LLM 전체 판단 근거 (과거 사례 분석, 법적 근거, 판단 근거)
 
     [액션 코드 매핑]
     - field_action: BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN
@@ -49,32 +54,39 @@ def extract_actions(state: "ResponseAgentState", config: "Config") -> Dict[str, 
         config: 시스템 설정
 
     Returns:
-        업데이트된 상태 (actions, rag_references)
+        업데이트된 상태 (actions, rag_references, reasoning)
     """
     from ....clients.backend_client import BackendClient
 
     actions = []
     rag_references = []
+    reasoning = ""
+    action_reasons = {}  # LLM이 응답한 조치별 이유 {"조치명": "이유"}
 
     # Human-in-the-Loop 승인 정보 확인
-    # 백엔드 API 응답 구조:
-    # {
-    #     "approved": bool,
-    #     "status": "approved" | "rejected" | "timeout",
-    #     "user_id": str | None,    # userId
-    #     "user_name": str | None,  # userName
-    #     "user_mail": str | None,  # userMail
-    #     "action_id": str | None   # 백엔드에서 생성된 action ID
-    # }
     approval_result = state.get("approval_result", {})
-    approval_user_id = approval_result.get("user_id")      # HITL 승인/거절자 ID
-    approval_user_name = approval_result.get("user_name")  # HITL 승인/거절자 이름
-    approval_user_mail = approval_result.get("user_mail")  # HITL 승인/거절자 이메일
-    approval_action_id = approval_result.get("action_id")  # 백엔드에서 생성된 action ID
+    approval_user_id = approval_result.get("user_id")
+    approval_user_name = approval_result.get("user_name")
+    approval_user_mail = approval_result.get("user_mail")
+    approval_action_id = approval_result.get("action_id")
 
     # 이벤트 ID (백엔드 갱신에 필요)
     event_id = state.get("event_id", "")
 
+    # 1단계: LLM 응답(AIMessage)에서 판단 근거와 조치 이유 추출
+    for message in state.get("messages", []):
+        if isinstance(message, AIMessage) and message.content:
+            # 전체 판단 근거 추출
+            extracted_reasoning = _extract_reasoning(message.content)
+            if extracted_reasoning:
+                reasoning = extracted_reasoning
+
+            # 조치별 이유 추출 (### 선택한 조치 섹션에서)
+            extracted_reasons = _extract_action_reasons(message.content)
+            if extracted_reasons:
+                action_reasons.update(extracted_reasons)
+
+    # 2단계: 도구 실행 결과(ToolMessage)에서 actions 추출
     for message in state.get("messages", []):
         if isinstance(message, ToolMessage):
             content = message.content
@@ -87,21 +99,18 @@ def extract_actions(state: "ResponseAgentState", config: "Config") -> Dict[str, 
                 })
 
             # execute_field_action 결과 → actions
-            # field_action은 자동 실행이므로 user_id = None
             elif "현장 조치 실행 결과" in content:
-                action_data = _extract_field_action(content)
+                action_data = _extract_field_action(content, action_reasons)
                 if action_data:
                     actions.append(action_data)
 
             # emergency_call 결과 → actions + 백엔드 갱신
-            # emergency_call은 HITL 승인이 필요하므로 user_id 포함 가능
             elif "긴급 신고 접수 결과" in content:
                 action_data = _extract_emergency_call_approved(
-                    content, approval_user_id, approval_user_name, approval_user_mail
+                    content, approval_user_id, approval_user_name, approval_user_mail, action_reasons
                 )
                 if action_data:
                     actions.append(action_data)
-                    # 백엔드 갱신
                     _update_backend_action(
                         config, event_id, approval_action_id,
                         action_data["action"], action_data["description"], approval_user_id
@@ -129,10 +138,121 @@ def extract_actions(state: "ResponseAgentState", config: "Config") -> Dict[str, 
                         action_data["action"], action_data["description"], None
                     )
 
-    return {"actions": actions, "rag_references": rag_references}
+    return {"actions": actions, "rag_references": rag_references, "reasoning": reasoning}
 
 
-def _extract_field_action(content: str) -> Dict[str, Any]:
+def _extract_reasoning(content: str) -> str:
+    """
+    LLM 응답에서 전체 판단 근거를 추출합니다.
+
+    [추출 대상]
+    - ### 과거 사례 분석
+    - ### 법적 근거
+    - ### 판단 근거
+
+    Args:
+        content: LLM 응답 텍스트
+
+    Returns:
+        추출된 판단 근거 텍스트 (없으면 빈 문자열)
+    """
+    if not content:
+        return ""
+
+    reasoning_parts = []
+
+    # 과거 사례 분석 추출
+    case_match = re.search(r"### 과거 사례 분석\s*\n(.*?)(?=###|\Z)", content, re.DOTALL)
+    if case_match:
+        reasoning_parts.append(f"[과거 사례 분석]\n{case_match.group(1).strip()}")
+
+    # 법적 근거 추출
+    legal_match = re.search(r"### 법적 근거\s*\n(.*?)(?=###|\Z)", content, re.DOTALL)
+    if legal_match:
+        reasoning_parts.append(f"[법적 근거]\n{legal_match.group(1).strip()}")
+
+    # 판단 근거 추출
+    decision_match = re.search(r"### 판단 근거\s*\n(.*?)(?=###|\Z)", content, re.DOTALL)
+    if decision_match:
+        reasoning_parts.append(f"[판단 근거]\n{decision_match.group(1).strip()}")
+
+    return "\n\n".join(reasoning_parts)
+
+
+def _extract_action_reasons(content: str) -> Dict[str, str]:
+    """
+    LLM 응답에서 '### 선택한 조치' 섹션의 조치별 이유를 추출합니다.
+
+    예시 입력:
+    ### 선택한 조치
+    1. 현장 방송 경고 - 무단투기 중단 및 경고 메시지 전달
+    2. 112 신고 - 폭행 현행범 신고 및 가해자 검거 요청
+
+    Args:
+        content: LLM 응답 텍스트
+
+    Returns:
+        {"현장 방송 경고": "무단투기 중단 및 경고 메시지 전달", ...}
+    """
+    if not content:
+        return {}
+
+    reasons = {}
+
+    # ### 선택한 조치 섹션 추출
+    actions_match = re.search(r"### 선택한 조치\s*\n(.*?)(?=###|\Z)", content, re.DOTALL)
+    if not actions_match:
+        return {}
+
+    actions_text = actions_match.group(1)
+
+    # 각 조치 라인 파싱: "1. [조치명] - [이유]" 또는 "- [조치명] - [이유]"
+    lines = actions_text.strip().split("\n")
+    for line in lines:
+        # "1. 현장 방송 경고 - 이유" 또는 "- 112 신고 - 이유" 패턴
+        match = re.match(r"^[\d\.\-\*]\s*(.+?)\s*-\s*(.+)$", line.strip())
+        if match:
+            action_name = match.group(1).strip()
+            reason = match.group(2).strip()
+            reasons[action_name] = reason
+
+    return reasons
+
+
+def _match_action_reason(action_code: str, action_reasons: Dict[str, str]) -> str:
+    """
+    action 코드에 해당하는 이유를 찾습니다.
+
+    Args:
+        action_code: 액션 코드 (BROADCAST, 112_POLICE 등)
+        action_reasons: LLM에서 추출한 {"조치명": "이유"} 딕셔너리
+
+    Returns:
+        매칭된 이유 (없으면 빈 문자열)
+    """
+    # 액션 코드와 조치명 매핑
+    code_to_keywords = {
+        "BROADCAST": ["방송", "BROADCAST"],
+        "LIGHT_ON": ["조명", "LIGHT"],
+        "PTZ_TRACK": ["PTZ", "추적"],
+        "SIREN": ["사이렌", "SIREN"],
+        "112_POLICE": ["112", "경찰"],
+        "119_FIRE": ["119", "소방", "응급"],
+        "SECURITY_TEAM": ["보안팀", "보안"],
+        "MANAGEMENT": ["관리사무소", "관리"],
+    }
+
+    keywords = code_to_keywords.get(action_code, [])
+
+    for action_name, reason in action_reasons.items():
+        for keyword in keywords:
+            if keyword in action_name:
+                return reason
+
+    return ""
+
+
+def _extract_field_action(content: str, action_reasons: Dict[str, str]) -> Dict[str, Any]:
     """execute_field_action 결과에서 action 정보 추출"""
     # action 코드 추출 (BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN)
     action_code = None
@@ -152,16 +272,20 @@ def _extract_field_action(content: str) -> Dict[str, Any]:
     time_match = re.search(r"- 실행 시각:\s*(.+)", content)
     triggered_at = time_match.group(1).strip() if time_match else ""
 
+    # LLM이 응답한 조치 이유 찾기
+    reason = _match_action_reason(action_code, action_reasons) if action_code else ""
+
     # description 조립
     if action_code == "BROADCAST" and broadcast_msg:
-        description = f"[{action_code}] 카메라 {camera_id}에서 방송 실행: \"{broadcast_msg}\" (실행 시각: {triggered_at})"
+        description = f"카메라 {camera_id}에서 방송 실행: \"{broadcast_msg}\""
     else:
-        description = f"[{action_code}] 카메라 {camera_id}에서 현장 조치 실행 (실행 시각: {triggered_at})"
+        description = f"카메라 {camera_id}에서 {action_code} 조치 실행"
 
     return {
         "action": action_code,
         "description": description,
-        "user_id": None  # field_action은 자동 실행 (HITL 미적용)
+        "reason": reason,  # LLM 판단 이유 추가
+        "user_id": None
     }
 
 
@@ -169,7 +293,8 @@ def _extract_emergency_call_approved(
     content: str,
     user_id: str,
     user_name: str,
-    user_mail: str
+    user_mail: str,
+    action_reasons: Dict[str, str]
 ) -> Dict[str, Any]:
     """emergency_call 승인 결과에서 action 정보 추출"""
     # agency 추출 후 action 코드로 변환
@@ -199,17 +324,18 @@ def _extract_emergency_call_approved(
         if user_mail:
             approver_info += f" ({user_mail})"
 
+    # LLM이 응답한 조치 이유 찾기
+    reason = _match_action_reason(action_code, action_reasons) if action_code else ""
+
     # description 조립
-    description = f"[APPROVED] {agency_name} 긴급 신고 접수"
-    if approver_info:
-        description += f" | {approver_info}"
-    description += f" (접수번호: {receipt_no}, 접수 시각: {triggered_at})"
+    description = f"{agency_name} 긴급 신고 접수"
     if situation_summary:
-        description += f" - 상황: {situation_summary}"
+        description += f" - {situation_summary}"
 
     return {
         "action": action_code,
         "description": description,
+        "reason": reason,  # LLM 판단 이유 추가
         "user_id": user_id
     }
 
@@ -233,13 +359,14 @@ def _extract_emergency_call_rejected(
         if user_mail:
             rejecter_info += f" ({user_mail})"
 
-    description = f"[REJECTED] 긴급 신고 요청이 사용자에 의해 거부됨"
+    description = f"긴급 신고 요청이 사용자에 의해 거부됨"
     if rejecter_info:
-        description += f" | {rejecter_info}"
+        description += f" ({rejecter_info})"
 
     return {
         "action": action_code,
         "description": description,
+        "reason": "사용자 거부",  # 거절 이유
         "user_id": user_id
     }
 
@@ -250,11 +377,12 @@ def _extract_emergency_call_timeout(state: "ResponseAgentState") -> Dict[str, An
     pending_agency_type = pending_approval.get("agency_type", "")
 
     action_code = f"TIMEOUT_{pending_agency_type}" if pending_agency_type else "TIMEOUT_EMERGENCY"
-    description = f"[TIMEOUT] 긴급 신고 요청에 대한 응답 타임아웃"
+    description = f"긴급 신고 요청에 대한 응답 타임아웃"
 
     return {
         "action": action_code,
         "description": description,
+        "reason": "응답 타임아웃",  # 타임아웃 이유
         "user_id": None
     }
 

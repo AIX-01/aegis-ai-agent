@@ -49,8 +49,12 @@ class ResponseAgentState(TypedDict):
     # knowledge_context: LLM에 주입할 검색 결과 텍스트 (매뉴얼 + 과거 사례)
     knowledge_context: str
 
-    # report: 최종 보고서 {content, files, generated_at}
-    report: Dict[str, Any]
+    # reasoning: LLM 판단 근거 (과거 사례 분석, 법적 근거, 판단 근거)
+    # extract_actions 노드에서 LLM 응답을 파싱하여 저장
+    reasoning: str
+
+    # report: 최종 보고서 HTML 문자열
+    report: str
 
     # report_updated: 백엔드 갱신 여부
     report_updated: bool
@@ -65,7 +69,7 @@ class ResponseAgentState(TypedDict):
     # Human-in-the-Loop 승인 관련
     # =========================================
     # 백엔드 API 경유 방식:
-    # POST /internal/agent/events/{eventId}/actions/{actionId}/confirm
+    # POST /internal/agent/events/{eventId}/actions/{actionId}/pending
     #
     # Response Body:
     # {

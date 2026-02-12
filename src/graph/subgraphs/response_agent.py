@@ -222,7 +222,8 @@ def response_agent_node(state: AnalysisState, config: Config) -> Dict[str, Any]:
             "actions": [],
             "rag_references": [],
             "knowledge_context": "",
-            "report": {},
+            "reasoning": "",  # LLM 판단 근거
+            "report": "",     # HTML 보고서 문자열
             "report_updated": False,
             "iteration": 0,
             "errors": [],
@@ -238,7 +239,7 @@ def response_agent_node(state: AnalysisState, config: Config) -> Dict[str, Any]:
         return {
             "actions": result.get("actions", []),
             "rag_references": result.get("rag_references", []),
-            "report": result.get("report", {}),
+            "report": result.get("report", ""),
             "report_updated": result.get("report_updated", False)
         }
 
@@ -247,11 +248,7 @@ def response_agent_node(state: AnalysisState, config: Config) -> Dict[str, Any]:
         return {
             "actions": [],
             "rag_references": [],
-            "report": {
-                "content": f"보고서 생성 실패: {e}",
-                "files": {"pdf": None, "docx": None, "pptx": None, "hwp": None},
-                "generated_at": datetime.now().isoformat()
-            },
+            "report": f"<html><body><h1>보고서 생성 실패</h1><p>{e}</p></body></html>",
             "report_updated": False,
             "errors": state.get("errors", []) + [f"Response agent exception: {e}"]
         }

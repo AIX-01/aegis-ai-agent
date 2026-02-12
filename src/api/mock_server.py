@@ -63,12 +63,19 @@ class EventCreationResponse(BaseModel):
     event_id: str
 
 class EventUpdateRequest(BaseModel):
-    risk: Optional[RiskLevel] = None
-    type: Optional[EventType] = None
-    summary: Optional[str] = None
-    risk_score: Optional[str] = None  # VARCHAR(10)
-    report: Optional[dict] = None     # {content, files: {pdf, docx, pptx, hwp}, generated_at}
-    actions: Optional[list] = None    # 대응 조치 리스트
+    """
+    이벤트 갱신 요청 모델
+
+    [API 엔드포인트]
+    PATCH /internal/agent/events/{eventId}
+
+    모든 필드는 optional이며, 업데이트할 값만 전달합니다.
+    """
+    risk: Optional[str] = None      # normal | suspicious | abnormal
+    type: Optional[str] = None      # assault | burglary | dump | swoon | vandalism
+    summary: Optional[str] = None   # AI 분석 요약
+    report: Optional[str] = None    # 상세 보고서 내용 (문자열)
+    status: Optional[str] = None    # processing | analyzed
 
 class ReportUploadRequest(BaseModel):
     """보고서 업로드 요청 (클립과 동일한 방식)"""
@@ -198,44 +205,36 @@ class MockBackendServer:
             self.logger.info(f"  - 데이터: risk='{payload.risk}', type='{payload.type}', occurred_at='{payload.occurred_at}'")
             return EventCreationResponse(event_id=event_id)
 
-        # 2차 분석: 이벤트 갱신
+        # 2차 분석: 이벤트 갱신 (통합 API)
         @self.app.patch("/api/vlm-results/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
         async def update_event(event_id: str, payload: EventUpdateRequest):
+            """
+            이벤트 갱신 API (분석 결과 + 보고서 + 상태 통합)
+
+            PATCH /internal/agent/events/{eventId}
+
+            Request Body (모두 optional, 업데이트할 값만 전달):
+            - risk: normal | suspicious | abnormal
+            - type: assault | burglary | dump | swoon | vandalism
+            - summary: AI 분석 요약
+            - report: 상세 보고서 내용 (문자열)
+            - status: processing | analyzed
+            """
             self.logger.info(f"[백엔드 갱신] 이벤트 갱신 수신 (Event ID: {event_id})")
 
-            # 기본 필드 출력
+            # 업데이트된 필드만 출력
             if payload.risk:
                 self.logger.info(f"  - risk: {payload.risk}")
             if payload.type:
                 self.logger.info(f"  - type: {payload.type}")
             if payload.summary:
-                self.logger.info(f"  - summary: {payload.summary[:100]}...")
-            if payload.risk_score:
-                self.logger.info(f"  - risk_score: {payload.risk_score}")
-
-            # 보고서 출력
+                summary_preview = payload.summary[:100] if len(payload.summary) > 100 else payload.summary
+                self.logger.info(f"  - summary: {summary_preview}...")
             if payload.report:
-                self.logger.info(f"  - report:")
-                if payload.report.get("content"):
-                    content_preview = payload.report["content"][:200].replace("\n", " ")
-                    self.logger.info(f"      content: {content_preview}...")
-                if payload.report.get("files"):
-                    self.logger.info(f"      files:")
-                    for fmt, url in payload.report["files"].items():
-                        self.logger.info(f"        {fmt}: {url or '(미생성)'}")
-                if payload.report.get("generated_at"):
-                    self.logger.info(f"      generated_at: {payload.report['generated_at']}")
-
-            # 대응 조치 출력 (event_actions 테이블 스키마와 일치)
-            if payload.actions:
-                self.logger.info(f"  - actions ({len(payload.actions)}건):")
-                for i, action in enumerate(payload.actions, 1):
-                    # action: 조치 유형/코드, description: 설명, user_id: HITL 승인자 ID
-                    action_code = action.get("action", "unknown")
-                    desc = action.get("description", "")[:80]
-                    user_id = action.get("user_id")
-                    user_info = f" (승인자: {user_id})" if user_id else " (자동)"
-                    self.logger.info(f"      [{i}] {action_code}: {desc}{user_info}")
+                report_preview = payload.report[:200].replace("\n", " ") if len(payload.report) > 200 else payload.report.replace("\n", " ")
+                self.logger.info(f"  - report: {report_preview}...")
+            if payload.status:
+                self.logger.info(f"  - status: {payload.status}")
 
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
