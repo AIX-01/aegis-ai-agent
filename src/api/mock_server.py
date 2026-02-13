@@ -6,7 +6,7 @@ import random
 import time
 import uuid
 from typing import List, Union, Literal, Optional
-from fastapi import FastAPI, Response, status, Request
+from fastapi import FastAPI, Response, status
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -30,24 +30,6 @@ class VLMAnalysisResponse(BaseModel):
     risk_level: RiskLevel
     event_type: EventType
 
-
-# =========================
-# 정밀 분석 서버 모델
-# =========================
-class PrecisionAnalysisRequest(BaseModel):
-    camera_id: str
-    frames: List[str]
-    num_frames: int
-    occurred_at: str # timestamp 대신 occurred_at 사용
-    window_start: Union[int, str]
-    window_end: Union[int, str]
-    vlm_result: dict
-
-class PrecisionAnalysisResponse(BaseModel):
-    risk: RiskLevel
-    event_type: EventType
-    summary: str
-    risk_score: float
 
 
 # =========================
@@ -76,15 +58,6 @@ class EventUpdateRequest(BaseModel):
     summary: Optional[str] = None   # AI 분석 요약
     report: Optional[str] = None    # 상세 보고서 내용 (문자열)
     status: Optional[str] = None    # processing | analyzed
-
-class ReportUploadRequest(BaseModel):
-    """보고서 업로드 요청 (클립과 동일한 방식)"""
-    format: str  # pdf, docx, pptx, hwp
-
-class ReportUploadResponse(BaseModel):
-    """보고서 업로드 응답 - MinIO presigned URL 반환"""
-    upload_url: str
-    report_path: str
 
 
 # =========================
@@ -127,61 +100,6 @@ class MockVLMServer:
 
     def run(self):
         self.logger.info(f"[시작] VLM 트리거 서버를 {self.port} 포트에서 시작합니다")
-        uvicorn.run(self.app, host="0.0.0.0", port=self.port, log_level="warning")
-
-
-# =========================
-# 정밀 분석 모의 서버
-# =========================
-class MockPrecisionServer:
-    """정밀 분석 모의 서버"""
-    def __init__(self, port: int = 8002):
-        self.port = port
-        self.logger = logging.getLogger("aegis-agent.mock_precision")
-        self.app = FastAPI(title="AEGIS 모의 정밀 분석 서버")
-        self._setup_routes()
-
-    def _setup_routes(self):
-        @self.app.post("/precision_analyze", response_model=PrecisionAnalysisResponse)
-        async def precision_analyze(request: PrecisionAnalysisRequest):
-            # 허용된 공식 이벤트 타입 목록
-            valid_types = ["ASSAULT", "BURGLARY", "DUMP", "SWOON", "VANDALISM"]
-            
-            vlm_risk_level = request.vlm_result.get("risk_level", "NORMAL")
-            
-            # 클라이언트로부터 받은 타입을 확인하되, 유효하지 않으면 기본값(DUMP) 또는 랜덤 선택합니다.
-            # 이 로직은 Pydantic 검증 오류(500 Error)를 방지하는 핵심 장치입니다.
-            raw_event_type = request.vlm_result.get("event_type", "DUMP").upper()
-            vlm_event_type = raw_event_type if raw_event_type in valid_types else random.choice(valid_types)
-
-            if vlm_risk_level.upper() in ["ABNORMAL", "SUSPICIOUS"]:
-                # 정밀 분석 모의 결과: 무조건 유효한 5종 중 하나를 반환합니다.
-                event_type = random.choice(valid_types)
-                summary = f"모의 정밀 분석 결과: {event_type} 이벤트가 감지되었습니다."
-                risk_score = random.uniform(0.8, 1.0)
-                risk = "ABNORMAL"
-            else:
-                # NORMAL 상황에서도 무조건 유효한 타입 규격을 준수합니다.
-                event_type = vlm_event_type
-                summary = "정상 상황으로 판단되어 정밀 분석을 수행하지 않았습니다."
-                risk_score = random.uniform(0.0, 0.2)
-                risk = "NORMAL"
-            
-            self.logger.info(f"\n{'='*80}\n[정밀 분석 결과] 카메라: {request.camera_id}, VLM 트리거: {vlm_risk_level.upper()} ({vlm_event_type}), 분석 결과: {event_type} (점수: {risk_score:.2f})\n{'='*80}\n")
-            
-            return PrecisionAnalysisResponse(
-                risk=risk,
-                event_type=event_type,
-                summary=summary,
-                risk_score=risk_score,
-            )
-
-        @self.app.get("/health")
-        async def health():
-            return {"status": "healthy", "server": "precision_analysis"}
-
-    def run(self):
-        self.logger.info(f"[시작] 정밀 분석 서버를 {self.port} 포트에서 시작합니다")
         uvicorn.run(self.app, host="0.0.0.0", port=self.port, log_level="warning")
 
 
@@ -238,47 +156,6 @@ class MockBackendServer:
 
             return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-        # 보고서 업로드 URL 요청 (클립과 동일한 방식)
-        @self.app.post("/api/vlm-results/{event_id}/report", response_model=ReportUploadResponse)
-        async def get_report_upload_url(event_id: str, payload: ReportUploadRequest):
-            """보고서 업로드를 위한 로컬 저장 경로 반환 (Mock 모드)"""
-            report_format = payload.format.lower()
-            report_path = f"reports/{event_id}/report.{report_format}"
-
-            # Mock 모드: 로컬 저장 URL 생성
-            local_upload_url = f"http://localhost:{self.port}/api/vlm-results/{event_id}/report/upload?format={report_format}"
-
-            self.logger.info(f"[보고서 업로드 URL 요청] Event ID: {event_id}")
-            self.logger.info(f"  - format: {report_format}")
-            self.logger.info(f"  - report_path: {report_path}")
-
-            return ReportUploadResponse(
-                upload_url=local_upload_url,
-                report_path=report_path
-            )
-
-        # 보고서 실제 업로드 (로컬 저장)
-        @self.app.put("/api/vlm-results/{event_id}/report/upload")
-        async def upload_report_file(event_id: str, format: str, request: Request):
-            """보고서 파일을 로컬에 저장 (Mock 모드)"""
-            import os
-
-            # 프로젝트 루트 기준으로 저장 경로 설정
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            save_dir = os.path.join(project_root, "mock_reports", event_id)
-            os.makedirs(save_dir, exist_ok=True)
-
-            # 파일 저장
-            file_path = os.path.join(save_dir, f"report.{format}")
-            body = await request.body()
-
-            with open(file_path, "wb") as f:
-                f.write(body)
-
-            self.logger.info(f"✅ [보고서 로컬 저장 완료] {file_path} ({len(body)} bytes)")
-
-            return {"status": "saved", "path": file_path, "size": len(body)}
-
         # 클립 업로드 URL 발급
         @self.app.get("/api/vlm-results/{event_id}/clip/upload-url")
         async def get_clip_upload_url(event_id: str):
@@ -323,13 +200,12 @@ def main():
 
     parser = argparse.ArgumentParser(description="AEGIS Mock 서버")
     parser.add_argument("--vlm", action="store_true", help="VLM Mock 서버 실행 (포트 8001)")
-    parser.add_argument("--precision", action="store_true", help="Precision Mock 서버 실행 (포트 8002)")
     parser.add_argument("--backend", action="store_true", help="Backend Mock 서버 실행 (포트 8088)")
     parser.add_argument("--all", action="store_true", help="모든 Mock 서버 실행")
     args = parser.parse_args()
 
     # 기본값: 아무 옵션도 없으면 모든 서버 실행
-    if not (args.vlm or args.precision or args.backend or args.all):
+    if not (args.vlm or args.backend or args.all):
         args.all = True
 
     threads = []
