@@ -32,7 +32,7 @@ src/
 │
 ├── api/
 │   ├── __init__.py
-│   └── mock_server.py          # Mock 서버 (VLM, Precision, Backend)
+│   └── mock_server.py          # Mock 서버 (VLM, Backend)
 │
 ├── clients/
 │   ├── __init__.py
@@ -140,7 +140,6 @@ scripts/
 | 설정 | 기본값 | 설명 |
 |------|--------|------|
 | `real_vlm` | `False` | 실제 VLM 서버 사용 |
-| `real_precision` | `False` | 실제 정밀 분석 서버 사용 |
 | `real_backend` | `False` | 실제 백엔드 서버 사용 |
 
 > `config.py`에서 `True`로 설정하면 CLI 플래그 없이도 항상 실제 서버를 사용합니다.
@@ -1111,16 +1110,14 @@ cp .env.sample .env
 python -m src.app
 ```
 - VLM: Mock 서버 (localhost:8001)
-- 정밀 분석: Mock 서버 (localhost:8002)
 - 백엔드: Mock 서버 (localhost:8088)
-- 보고서: `mock_reports/{event_id}/` 로컬 저장
 
 ---
 
 # 컴포넌트별 실제 서버 사용
 python -m src.app --real-vlm
 python -m src.app --real-vlm --real-backend
-python -m src.app --real-vlm --real-precision --real-backend
+python -m src.app --real-vlm --real-backend
 
 #### 6. 디버그 모드
 ```bash
@@ -1185,35 +1182,35 @@ PATCH /internal/agent/events/{event_id}/analysis
 
 ---
 
-### Mock 서버 단독 실행
-
-보고서 형식 테스트를 위해 Mock 백엔드 서버만 실행할 수 있습니다:
+### Mock 서버 단독 실행 (개발/테스트용)
 
 ```bash
 cd aegis-ai-agent/src
+
+# 모든 Mock 서버 실행 (기본값, --all과 동일)
 python -m api.mock_server
+
+# 특정 서버만 실행
+python -m api.mock_server --vlm         # VLM Mock 서버만 (포트 8001)
+python -m api.mock_server --backend     # 백엔드 Mock 서버만 (포트 8088)
+python -m api.mock_server --all         # 모든 Mock 서버 (기본값)
 ```
 
-**또는 특정 서버만 실행:**
+> **참고:** 실제 서비스 실행 시(`python -m src.app`)에는 위 arg를 사용하지 않고,
+> `config.py`의 `real_vlm`, `real_backend` 플래그로 Mock 서버 실행 여부를 제어합니다.
 
-```bash
-# Mock 백엔드 서버만 (포트 8088)
-python -c "from api.mock_server import MockBackendServer; MockBackendServer().run()"
+**Mock 서버 엔드포인트 현황:**
 
-# Mock VLM 서버만 (포트 8001)
-python -c "from api.mock_server import MockVLMServer; MockVLMServer().run()"
-
-# Mock 정밀분석 서버만 (포트 8002)
-python -c "from api.mock_server import MockPrecisionServer; MockPrecisionServer().run()"
-```
-
-### 보고서 템플릿 테스트
-
-```bash
-cd aegis-ai-agent
-python scripts/test_report_templates.py
-```
-결과: `mock_reports/test_output/` 폴더에 PDF, DOCX, PPTX 생성
+| 서버 | 포트 | 엔드포인트 | 설명 |
+|------|------|-----------|------|
+| VLM (`--vlm`) | 8001 | `POST /analyze` | VLM 1차 분석 (랜덤 risk_level 반환) |
+| | | `GET /health` | 헬스 체크 |
+| Backend (`--backend`) | 8088 | `POST /api/vlm-results` | 이벤트 생성 (UUID 발급) |
+| | | `PATCH /api/vlm-results/{event_id}` | 이벤트 갱신 (분석결과+보고서+상태) |
+| | | `GET /api/vlm-results/{event_id}/clip/upload-url` | 클립 업로드 URL 발급 |
+| | | `PUT /api/vlm-results/{event_id}/clip/upload` | 클립 업로드 수신 |
+| | | `POST /api/vlm-results/{event_id}/clip/confirm` | 클립 업로드 확정 |
+| | | `GET /health` | 헬스 체크 |
 
 ---
 
