@@ -17,7 +17,7 @@ from .core.windowing import WindowManager
 from .core.producer import FrameProducer
 from .core.consumer import ConsumerPool
 from .core.redis_manager import RedisManager
-from .api.mock_server import MockVLMServer, MockPrecisionServer, MockBackendServer
+from .api.mock_server import MockVLMServer, MockBackendServer
 
 
 class AegisAgent:
@@ -59,14 +59,13 @@ class AegisAgent:
 
         # 모의 서버 스레드
         self.mock_vlm_server_thread = None
-        self.mock_precision_server_thread = None
         self.mock_backend_server_thread = None
 
     def start(self):
         """모든 컴포넌트를 시작합니다."""
         self.logger.info("=" * 80)
         self.logger.info("AEGIS AI Agent - LangGraph 기반 분석 파이프라인")
-        real_components = [name for name, flag in [("VLM", self.config.real_vlm), ("Precision", self.config.real_precision), ("Backend", self.config.real_backend)] if flag]
+        real_components = [name for name, flag in [("VLM", self.config.real_vlm), ("Backend", self.config.real_backend)] if flag]
         self.logger.info(f"실제 서버: {', '.join(real_components) if real_components else '없음 (전체 Mock)'}")
         self.logger.info("=" * 80)
 
@@ -91,15 +90,6 @@ class AegisAgent:
             self.mock_vlm_server_thread.start()
         else:
             self.logger.info("실제 VLM 서버를 사용합니다. (Mock VLM 서버 실행 안 함)")
-
-        # 정밀 분석 모의 서버
-        if not self.config.real_precision:
-            self.logger.info(f"모의 정밀 분석 서버를 {self.config.mock_precision_port} 포트에서 시작합니다.")
-            mock_precision_server = MockPrecisionServer(self.config.mock_precision_port)
-            self.mock_precision_server_thread = threading.Thread(target=mock_precision_server.run, daemon=True)
-            self.mock_precision_server_thread.start()
-        else:
-            self.logger.info("실제 정밀 분석 서버를 사용합니다. (Mock 정밀 분석 서버 실행 안 함)")
 
         # 백엔드 모의 서버
         if not self.config.real_backend:
@@ -209,12 +199,8 @@ async def lifespan(app: FastAPI):
     
     if args.real_vlm:
         config.real_vlm = True
-    if args.real_precision:
-        config.real_precision = True
     if args.real_backend:
         config.real_backend = True
-    if args.real_backend_events_only:
-        config.real_backend_events_only = True
 
     if args.log_level:
         config.log_level = args.log_level.upper()
@@ -255,9 +241,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="AEGIS AI Agent - LangGraph 기반 분석 파이프라인")
     parser.add_argument("--workers", type=int, help="컨슈머 워커 스레드 수")
     parser.add_argument("--real-vlm", action="store_true", help="VLM 실제 서버 사용")
-    parser.add_argument("--real-precision", action="store_true", help="정밀 분석 실제 서버 사용")
     parser.add_argument("--real-backend", action="store_true", help="백엔드 실제 서버 사용")
-    parser.add_argument("--real-backend-events-only", action="store_true", help="1차/2차 갱신 + 클립은 실제 백엔드, 보고서만 Mock")
     parser.add_argument("--log-level", type=str, help="로깅 레벨 (DEBUG, INFO, WARNING, ERROR)")
     return parser.parse_args()
 

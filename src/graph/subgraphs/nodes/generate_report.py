@@ -5,6 +5,7 @@
 templates/reports/report_template.html 템플릿을 로드하여
 {{변수명}} 플레이스홀더를 실제 데이터로 치환합니다.
 """
+import base64
 import logging
 import os
 from datetime import datetime
@@ -37,19 +38,12 @@ def generate_report_node(state: "ResponseAgentState", app_config: "Config") -> D
     camera_location = state.get("camera_location", "")
     event_type = state.get("event_type", "")
     risk_level = state.get("risk_level", "")
-    risk_score = state.get("risk_score", 0)
     summary = state.get("summary", "")
     occurred_at = state.get("occurred_at", "")
     actions = state.get("actions", [])
     frames = state.get("frames", [])
+    frame_timestamps = state.get("frame_timestamps", [])
     event_id = state.get("event_id", "")
-
-    # 위험 점수 포맷팅
-    risk_score_str = f"{risk_score:.2f}" if isinstance(risk_score, (int, float)) else str(risk_score)
-    risk_score_percent = f"{float(risk_score) * 100:.0f}%" if isinstance(risk_score, (int, float)) else str(risk_score)
-
-    # 위험도 클래스 및 텍스트
-    risk_class, risk_text = _get_risk_display(risk_level)
 
     # 이벤트 유형 한글 변환
     event_type_korean = _get_event_type_korean(event_type)
@@ -58,7 +52,7 @@ def generate_report_node(state: "ResponseAgentState", app_config: "Config") -> D
     actions_html = _generate_actions_html(actions)
 
     # 프레임 HTML 생성
-    frames_html = _generate_frames_html(frames)
+    frames_html = _generate_frames_html(frames, frame_timestamps)
 
     # 현재 시각
     generated_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -78,10 +72,6 @@ def generate_report_node(state: "ResponseAgentState", app_config: "Config") -> D
     report_html = report_html.replace("{{camera_name}}", str(camera_name))
     report_html = report_html.replace("{{camera_location}}", str(camera_location))
     report_html = report_html.replace("{{risk_level}}", str(risk_level))
-    report_html = report_html.replace("{{risk_class}}", risk_class)
-    report_html = report_html.replace("{{risk_text}}", risk_text)
-    report_html = report_html.replace("{{risk_score}}", risk_score_str)
-    report_html = report_html.replace("{{risk_score_percent}}", risk_score_percent)
     report_html = report_html.replace("{{summary}}", str(summary) if summary else "상황 요약 정보가 없습니다.")
     report_html = report_html.replace("{{frames}}", frames_html)
     report_html = report_html.replace("{{actions}}", actions_html)
@@ -127,25 +117,6 @@ def _load_template(app_config: "Config") -> str:
         logger.error(f"템플릿 로드 중 오류: {e}")
         return ""
 
-
-def _get_risk_display(risk_level: str) -> tuple:
-    """
-    위험도에 따른 CSS 클래스와 표시 텍스트를 반환합니다.
-
-    Args:
-        risk_level: 위험도 (ABNORMAL/SUSPICIOUS/NORMAL)
-
-    Returns:
-        (CSS 클래스, 표시 텍스트) 튜플
-    """
-    risk_upper = risk_level.upper() if risk_level else ""
-
-    if risk_upper == "ABNORMAL":
-        return ("risk-high", "🔴 위험")
-    elif risk_upper == "SUSPICIOUS":
-        return ("risk-warning", "🟡 의심")
-    else:
-        return ("", "🟢 정상")
 
 
 def _get_event_type_korean(event_type: str) -> str:
@@ -245,20 +216,45 @@ def _get_action_korean(action_code: str) -> str:
     return action_map.get(action_code, action_code)
 
 
-def _generate_frames_html(frames: list) -> str:
+def _generate_frames_html(frames: list, frame_timestamps: list = None) -> str:
     """
     프레임 목록을 HTML로 변환합니다.
+    base64 Data URL을 사용하여 브라우저에서 이미지를 직접 렌더링합니다.
 
     Args:
-        frames: 프레임 리스트 (base64 이미지 또는 URL)
+        frames: 프레임 리스트 (bytes 이미지)
+        frame_timestamps: 각 프레임의 타임스탬프 리스트 (datetime 또는 문자열)
 
     Returns:
-        HTML 문자열
+        HTML 문자열 (frames-grid 내 img 태그)
     """
     if not frames:
         return '<div class="no-frames">캡처된 프레임이 없습니다.</div>'
 
-    # 프레임이 있는 경우 개수만 표시 (base64 이미지는 용량이 크므로)
-    return f'<div class="no-frames">총 {len(frames)}개의 프레임이 캡처되었습니다.</div>'
+    if frame_timestamps is None:
+        frame_timestamps = []
+
+    html_parts = ['<div class="frames-grid">']
+    for idx, frame in enumerate(frames[:8]):
+        b64 = base64.b64encode(frame).decode('utf-8')
+
+        # 타임스탬프 포맷팅 (연월일 시:분:초)
+        if idx < len(frame_timestamps) and frame_timestamps[idx]:
+            ts = frame_timestamps[idx]
+            if hasattr(ts, 'strftime'):
+                time_label = ts.strftime("%Y년 %m월 %d일 %H:%M:%S")
+            else:
+                time_label = str(ts)
+        else:
+            time_label = f"프레임 {idx + 1}"
+
+        html_parts.append(
+            f'<div class="frame-item">\n'
+            f'  <img src="data:image/jpeg;base64,{b64}" alt="{time_label}" />\n'
+            f'  <div class="frame-label">{time_label}</div>\n'
+            f'</div>'
+        )
+    html_parts.append('</div>')
+    return '\n'.join(html_parts)
 
 

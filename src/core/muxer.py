@@ -94,10 +94,15 @@ def _patch_resolution(data: bytearray, width: int, height: int) -> bytearray:
         data[base+32:base+34] = struct.pack('>H', width)
         data[base+34:base+36] = struct.pack('>H', height)
     # tkhd 패치 (fixed-point 16.16)
+    # tkhd 구조: type(4) + ver+flags(4) + creation(4) + modification(4)
+    #   + track_id(4) + reserved(4) + duration(4) + reserved(8)
+    #   + layer(2) + alt_group(2) + volume(2) + reserved(2)
+    #   + matrix(36) + width(4) + height(4)
+    # → width: tkhd_idx+80, height: tkhd_idx+84 (version 0 기준)
     tkhd_idx = data.find(b'tkhd')
     if tkhd_idx > 0:
-        data[tkhd_idx+76:tkhd_idx+80] = struct.pack('>I', width << 16)
-        data[tkhd_idx+80:tkhd_idx+84] = struct.pack('>I', height << 16)
+        data[tkhd_idx+80:tkhd_idx+84] = struct.pack('>I', width << 16)
+        data[tkhd_idx+84:tkhd_idx+88] = struct.pack('>I', height << 16)
     return data
 def _faststart(data: bytes, width: int = 0, height: int = 0) -> bytes:
     """moov를 mdat 앞으로 이동하고 브라우저 호환성 처리를 적용합니다."""

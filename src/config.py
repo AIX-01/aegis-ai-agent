@@ -21,12 +21,9 @@ class Config:
     # ===================================================================
     # >> 1. 실제 서버 주소 설정 (이 부분을 실제 운영 서버에 맞게 수정하세요)
     # ===================================================================
-    _real_vlm_endpoint: str = "https://cumgphu2sfhedq-8000.proxy.runpod.net/v1"
+    _real_vlm_endpoint: str = "https://vldiq7yxvu311y-8000.proxy.runpod.net/v1"
     _real_vlm_api_key: str = "sk-IrR7Bwxtin0haWagUnPrBgq5PurnUz86"
     _real_vlm_model_id: str = "AIX-01/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit-3000steps-r64-b8-merged-16bit"
-    # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨
-    # _real_precision_endpoint: str = "http://<실제 LLM 서버 IP>:8002/precision_analyze"
-
     # 백엔드 엔드포인트 분리 (생성용 / 갱신용)
     # 갱신용 URL에는 {event_id} 플레이스홀더를 사용할 수 있습니다.
     
@@ -57,9 +54,7 @@ class Config:
     # - 여기서 True로 설정하면 CLI 플래그 없이도 항상 실제 서버 사용
     # - CLI 플래그(--real-vlm 등)는 False → True 전환만 가능 (True → False 불가)
     real_vlm: bool = False
-    real_precision: bool = False
     real_backend: bool = False
-    real_backend_events_only: bool = False  # True: 1차/2차 갱신 + 클립은 실제, 보고서만 Mock
 
     # ===================================================================
     # >> 3. 활성 엔드포인트 (수정 금지 - __post_init__에서 자동 설정됨)
@@ -67,7 +62,6 @@ class Config:
     vlm_endpoint: str = field(init=False)
     vlm_api_key: Optional[str] = field(init=False, default=None)
     vlm_model_id: str = field(init=False, default="vlm")
-    precision_endpoint: str = field(init=False)
     backend_create_endpoint: str = field(init=False)
     backend_update_endpoint: str = field(init=False)  # 이벤트 갱신 (분석 결과, 보고서, 상태 통합)
     backend_clip_endpoint: str = field(init=False)
@@ -87,7 +81,6 @@ class Config:
     # 모의 서버 포트 설정 (real_*=False인 컴포넌트에 사용)
     # =========================================
     mock_vlm_port: int = 8001
-    mock_precision_port: int = 8002
     mock_backend_port: int = 8088
 
     # =========================================
@@ -316,13 +309,6 @@ class Config:
             self.vlm_api_key = "mock-key"
             self.vlm_model_id = "mock-vlm"
 
-        # 정밀 분석 엔드포인트 설정
-        if self.real_precision:
-            # precision_client.py가 OpenAI Chat API (get_vision_completion)를 사용하도록 리팩토링됨
-            pass
-        else:
-            self.precision_endpoint = f"http://localhost:{self.mock_precision_port}/precision_analyze"
-
         # 백엔드 엔드포인트 설정 (생성/갱신/클립 분리, 갱신 엔드포인트가 분석+보고서+상태 통합)
         if self.real_backend:
             # 전체 실제 서버 사용
@@ -330,15 +316,6 @@ class Config:
             self.backend_update_endpoint = self._real_backend_update_endpoint
             self.backend_clip_endpoint = self._real_backend_clip_endpoint
             # HITL 엔드포인트도 실제 서버 사용
-            self.backend_action_create_endpoint = self._real_backend_action_create_endpoint
-            self.backend_action_confirm_endpoint = self._real_backend_action_confirm_endpoint
-            self.backend_action_update_endpoint = self._real_backend_action_update_endpoint
-        elif self.real_backend_events_only:
-            # 이벤트 관련 API만 실제 서버, 나머지는 Mock
-            self.backend_create_endpoint = self._real_backend_create_endpoint
-            self.backend_update_endpoint = self._real_backend_update_endpoint
-            self.backend_clip_endpoint = self._real_backend_clip_endpoint
-            # HITL 엔드포인트는 실제 서버 사용
             self.backend_action_create_endpoint = self._real_backend_action_create_endpoint
             self.backend_action_confirm_endpoint = self._real_backend_action_confirm_endpoint
             self.backend_action_update_endpoint = self._real_backend_action_update_endpoint

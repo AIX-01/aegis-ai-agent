@@ -218,6 +218,7 @@ def response_agent_node(state: AnalysisState, config: Config) -> Dict[str, Any]:
             "summary": state.get("summary", ""),
             "occurred_at": state.get("occurred_at"),
             "frames": state.get("frames", []),  # [추가] 보고서 이미지용
+            "frame_timestamps": state.get("frame_timestamps", []),  # [추가] 타임스탬프
             "messages": [],
             "actions": [],
             "rag_references": [],

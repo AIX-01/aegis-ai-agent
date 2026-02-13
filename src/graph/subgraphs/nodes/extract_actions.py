@@ -100,7 +100,9 @@ def extract_actions(state: "ResponseAgentState", config: "Config") -> Dict[str, 
 
             # execute_field_action 결과 → actions
             elif "현장 조치 실행 결과" in content:
-                action_data = _extract_field_action(content, action_reasons)
+                camera_location = state.get("camera_location", "")
+                camera_name = state.get("camera_name", "")
+                action_data = _extract_field_action(content, action_reasons, camera_location, camera_name)
                 if action_data:
                     actions.append(action_data)
 
@@ -342,7 +344,7 @@ def _match_action_reason(action_code: str, action_reasons: Dict[str, str]) -> st
     return ""
 
 
-def _extract_field_action(content: str, action_reasons: Dict[str, str]) -> Dict[str, Any]:
+def _extract_field_action(content: str, action_reasons: Dict[str, str], camera_location: str = "", camera_name: str = "") -> Dict[str, Any]:
     """execute_field_action 결과에서 action 정보 추출"""
     # action 코드 추출 (BROADCAST, LIGHT_ON, PTZ_TRACK, SIREN)
     action_code = None
@@ -365,11 +367,12 @@ def _extract_field_action(content: str, action_reasons: Dict[str, str]) -> Dict[
     # LLM이 응답한 조치 이유 찾기
     reason = _match_action_reason(action_code, action_reasons) if action_code else ""
 
-    # description 조립
+    # description 조립 (camera_location 우선, camera_name 2순위, camera_id 3순위)
+    camera_display = camera_location or camera_name or camera_id
     if action_code == "BROADCAST" and broadcast_msg:
-        description = f"카메라 {camera_id}에서 방송 실행: \"{broadcast_msg}\""
+        description = f"카메라 {camera_display}에서 방송 실행: \"{broadcast_msg}\""
     else:
-        description = f"카메라 {camera_id}에서 {action_code} 조치 실행"
+        description = f"카메라 {camera_display}에서 {action_code} 조치 실행"
 
     return {
         "action": action_code,
