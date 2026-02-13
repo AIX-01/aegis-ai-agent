@@ -32,6 +32,7 @@ class ResponseAgentState(TypedDict):
     summary: str
     occurred_at: datetime
     frames: List[bytes]  # CCTV 캡처 이미지 (보고서 생성용)
+    frame_timestamps: List[datetime]  # 각 프레임의 타임스탬프
 
     # =========================================
     # 에이전트 실행 중 생성
