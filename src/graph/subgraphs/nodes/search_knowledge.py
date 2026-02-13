@@ -75,15 +75,36 @@ def search_knowledge_node(state: "ResponseAgentState", config: "Config") -> Dict
         client = VectorStoreClient(config)
 
         if client.collection_exists("past_cases"):
-            past_results = client.search(
+            # =========================================
+            # 같은 event_type 내 최근 5건 검색
+            # =========================================
+            # 1) Qdrant에서 event_type 필터 + limit=20으로 넉넉히 검색
+            # 2) occurred_at 기준 최신순 정렬 (Python)
+            # 3) 상위 5건만 사용
+            MAX_RECENT_CASES = 5
+            raw_results = client.search(
                 collection_name="past_cases",
                 query=query,
-                limit=3,
+                limit=20,
                 filters={"event_type": event_type} if event_type else None
             )
 
+            # occurred_at 기준 최신순 정렬 후 상위 N건
+            if raw_results:
+                raw_results.sort(
+                    key=lambda r: r.get("data", {}).get("occurred_at", ""),
+                    reverse=True
+                )
+            past_results = raw_results[:MAX_RECENT_CASES]
+
             if past_results:
-                knowledge_text += "## 과거 유사 사례\n\n"
+                result_count = len(past_results)
+                knowledge_text += f"## 과거 유사 사례 (최근 {result_count}건)\n\n"
+
+                # 5건 미만인 경우 LLM에게 알림
+                if result_count < MAX_RECENT_CASES:
+                    knowledge_text += f"> 참고: 동일 유형({event_type}) 과거 사례가 {result_count}건뿐입니다. 대응 매뉴얼을 우선 참고하세요.\n\n"
+
                 for i, result in enumerate(past_results, 1):
                     payload = result.get("data", {})
                     score = result.get("score", 0)
@@ -95,7 +116,6 @@ def search_knowledge_node(state: "ResponseAgentState", config: "Config") -> Dict
                     # =========================================
                     # 시간대/요일 패턴 표시
                     # =========================================
-                    # LLM이 시간대 및 요일 패턴을 분석할 수 있도록 표시
                     hour = payload.get('hour_of_day')
                     day = payload.get('day_of_week')
                     day_names = ['월', '화', '수', '목', '금', '토', '일']
@@ -106,10 +126,8 @@ def search_knowledge_node(state: "ResponseAgentState", config: "Config") -> Dict
                     knowledge_text += f"- 상황: {payload.get('summary', '')}\n"
 
                     # =========================================
-                    # 과거 대응 조치 표시 (event_actions 테이블 스키마와 일치)
+                    # 과거 대응 조치 표시
                     # =========================================
-                    # actions 필드가 있으면 LLM이 참조할 수 있도록 표시
-                    # 형식: [{"action": "BROADCAST", "description": "...", "user_id": ...}, ...]
                     past_actions = payload.get('actions', [])
                     if past_actions:
                         knowledge_text += "- 대응조치:\n"
@@ -117,10 +135,8 @@ def search_knowledge_node(state: "ResponseAgentState", config: "Config") -> Dict
                             action_code = action.get('action', 'unknown')
                             action_desc = action.get('description', '')
                             user_id = action.get('user_id')
-                            # description이 너무 길면 첫 100자만 표시
                             if len(action_desc) > 100:
                                 action_desc = action_desc[:100] + "..."
-                            # HITL 승인 여부 표시
                             user_info = " (사용자 승인)" if user_id else ""
                             knowledge_text += f"  - [{action_code}] {action_desc}{user_info}\n"
                     knowledge_text += "\n"
@@ -128,12 +144,12 @@ def search_knowledge_node(state: "ResponseAgentState", config: "Config") -> Dict
                 rag_references.append({
                     "type": "past_cases",
                     "content": knowledge_text,
-                    "count": len(past_results)
+                    "count": result_count
                 })
-                logger.info(f"[{camera_id}] 과거 사례 {len(past_results)}건 검색 완료")
+                logger.info(f"[{camera_id}] 과거 사례 {result_count}건 검색 완료 (최근순, 최대 {MAX_RECENT_CASES}건)")
             else:
-                knowledge_text += "## 과거 유사 사례\n검색 결과 없음\n\n"
-                logger.info(f"[{camera_id}] 과거 사례 검색 결과 없음")
+                knowledge_text += f"## 과거 유사 사례\n동일 유형({event_type}) 과거 사례가 없습니다. 대응 매뉴얼을 참고하여 판단하세요.\n\n"
+                logger.info(f"[{camera_id}] 과거 사례 검색 결과 없음 (event_type: {event_type})")
         else:
             knowledge_text += "## 과거 유사 사례\n컬렉션이 존재하지 않습니다.\n\n"
             logger.warning(f"[{camera_id}] past_cases 컬렉션 미존재")

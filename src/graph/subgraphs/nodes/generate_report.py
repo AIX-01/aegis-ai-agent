@@ -38,20 +38,12 @@ def generate_report_node(state: "ResponseAgentState", app_config: "Config") -> D
     camera_location = state.get("camera_location", "")
     event_type = state.get("event_type", "")
     risk_level = state.get("risk_level", "")
-    risk_score = state.get("risk_score", 0)
     summary = state.get("summary", "")
     occurred_at = state.get("occurred_at", "")
     actions = state.get("actions", [])
     frames = state.get("frames", [])
     frame_timestamps = state.get("frame_timestamps", [])
     event_id = state.get("event_id", "")
-
-    # 위험 점수 포맷팅
-    risk_score_str = f"{risk_score:.2f}" if isinstance(risk_score, (int, float)) else str(risk_score)
-    risk_score_percent = f"{float(risk_score) * 100:.0f}%" if isinstance(risk_score, (int, float)) else str(risk_score)
-
-    # 위험도 클래스 및 텍스트
-    risk_class, risk_text = _get_risk_display(risk_level)
 
     # 이벤트 유형 한글 변환
     event_type_korean = _get_event_type_korean(event_type)
@@ -80,10 +72,6 @@ def generate_report_node(state: "ResponseAgentState", app_config: "Config") -> D
     report_html = report_html.replace("{{camera_name}}", str(camera_name))
     report_html = report_html.replace("{{camera_location}}", str(camera_location))
     report_html = report_html.replace("{{risk_level}}", str(risk_level))
-    report_html = report_html.replace("{{risk_class}}", risk_class)
-    report_html = report_html.replace("{{risk_text}}", risk_text)
-    report_html = report_html.replace("{{risk_score}}", risk_score_str)
-    report_html = report_html.replace("{{risk_score_percent}}", risk_score_percent)
     report_html = report_html.replace("{{summary}}", str(summary) if summary else "상황 요약 정보가 없습니다.")
     report_html = report_html.replace("{{frames}}", frames_html)
     report_html = report_html.replace("{{actions}}", actions_html)
@@ -129,25 +117,6 @@ def _load_template(app_config: "Config") -> str:
         logger.error(f"템플릿 로드 중 오류: {e}")
         return ""
 
-
-def _get_risk_display(risk_level: str) -> tuple:
-    """
-    위험도에 따른 CSS 클래스와 표시 텍스트를 반환합니다.
-
-    Args:
-        risk_level: 위험도 (ABNORMAL/SUSPICIOUS/NORMAL)
-
-    Returns:
-        (CSS 클래스, 표시 텍스트) 튜플
-    """
-    risk_upper = risk_level.upper() if risk_level else ""
-
-    if risk_upper == "ABNORMAL":
-        return ("risk-high", "🔴 위험")
-    elif risk_upper == "SUSPICIOUS":
-        return ("risk-warning", "🟡 의심")
-    else:
-        return ("", "🟢 정상")
 
 
 def _get_event_type_korean(event_type: str) -> str:

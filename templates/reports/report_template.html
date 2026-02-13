@@ -67,16 +67,8 @@
             <div class="info-value">{{camera_location}}</div>
           </div>
           <div class="info-item">
-            <div class="info-label">위험도</div>
-            <div class="info-value {{risk_class}}">{{risk_text}}</div>
-          </div>
-          <div class="info-item">
             <div class="info-label">이벤트 유형</div>
             <div class="info-value">{{event_type_korean}}</div>
-          </div>
-          <div class="info-item">
-            <div class="info-label">위험도 점수</div>
-            <div class="info-value {{risk_class}}">{{risk_score_percent}}</div>
           </div>
           <div class="info-item">
             <div class="info-label">분석 상태</div>
@@ -93,12 +85,12 @@
       </div>
 
       <div class="section">
-        <h2 class="section-title">시간 별 상황</h2>
+        <h2 class="section-title">영상 프레임</h2>
         {{frames}}
       </div>
 
       <div class="section">
-        <h2 class="section-title orange">권장 대응 절차</h2>
+        <h2 class="section-title orange">조치 내역</h2>
         <div class="actions-list">
           {{actions}}
         </div>
