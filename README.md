@@ -10,7 +10,8 @@ AEGIS AI Agent는 RTSP 스트림을 실시간으로 수신하여 VLM(Vision Lang
 
 | 분류 | 기술 | 버전 | 용도 |
 |------|------|------|------|
-| Language | Python | 3.12+ | 메인 언어 |
+| Language | Python | 3.12.12 | 메인 언어 |
+| Container | Docker | python:3.12-slim (3.12.12) | 컨테이너 베이스 이미지 |
 | Framework | LangGraph | 1.0.7 | 상태 기반 워크플로우 |
 | Framework | LangChain Core | 1.2.7 | LLM 추상화 |
 | API | FastAPI | 0.128.0 | REST API 서버 |
@@ -82,10 +83,6 @@ src/
 │       ├── __init__.py
 │       └── routers.py          # 조건부 분기 (analysis_router, verification_router)
 │
-├── services/                   # 비즈니스 로직 서비스
-│   ├── __init__.py
-│   └── report_generator.py     # 보고서 생성 서비스 (HTML, PDF, DOCX, PPTX)
-│
 └── tools/                      # LangChain 도구 및 유틸리티
     ├── __init__.py
     ├── manual_templates.py     # 대응 매뉴얼 템플릿 (이벤트 유형별)
@@ -95,12 +92,7 @@ src/
 templates/
 └── reports/                    # 보고서 템플릿
     ├── README.md               # 템플릿 사용법
-    ├── report_template.docx    # Word 템플릿
-    ├── report_template.pptx    # PowerPoint 템플릿
-    └── report_template.html    # PDF용 HTML 템플릿
-
-scripts/
-└── test_report_templates.py    # 보고서 템플릿 테스트 스크립트
+    └── report_template.html    # HTML 보고서 템플릿
 ```
 
 ---
@@ -286,30 +278,6 @@ Redis 기반 카메라 동기화를 담당합니다.
 
 ---
 
-### services/report_generator.py - ReportGeneratorService
-
-보고서를 생성하는 서비스입니다.
-
-**generate() 메서드:**
-- 입력: `report_data` (Dict), `frames` (List[bytes]), `formats` (List[str])
-- 출력: `{"html": bytes, "pdf": bytes, "docx": bytes, "pptx": bytes}`
-
-**지원 형식:**
-
-| 형식 | 템플릿 | 설명 |
-|------|--------|------|
-| HTML | `report_template.html` | PDF 변환용 |
-| PDF | - | wkhtmltopdf로 HTML 변환 |
-| DOCX | `report_template.docx` | 공식 문서용 (Frame 1~8 이미지 삽입) |
-| PPTX | `report_template.pptx` | 브리핑용 (4x2 이미지 그리드) |
-
-**플레이스홀더:**
-- `{{occurred_at}}`, `{{event_type}}`, `{{camera_name}}`, `{{camera_location}}`
-- `{{risk_level}}`, `{{risk_score}}`, `{{summary}}`, `{{actions}}`
-- `{{frames}}` 또는 `Frame 1` ~ `Frame 8` (DOCX 표 셀용)
-
----
-
 ### clients/backend_client.py - BackendClient
 
 백엔드 API 통신을 담당합니다.
@@ -404,7 +372,7 @@ LangGraph 파이프라인의 상태 정의입니다.
 | event_type | EventType | [M/S] | ASSAULT/BURGLARY/DUMP/SWOON/VANDALISM |
 | summary | str | [M/S] | 상황 요약 텍스트 |
 | risk_score | float | [M/S] | 위험 점수 (0.0 ~ 1.0) |
-| report | Dict | [S→M] | 보고서 {content, files, generated_at} |
+| report | str | [S→M] | HTML 보고서 문자열 |
 
 **메타 데이터:**
 
@@ -473,7 +441,7 @@ LangGraph 워크플로우를 빌드합니다.
 | `check_approval` | HITL 승인 요청 및 대기 | emergency_call 시에만 실행 |
 | `skip_emergency` | emergency_call 스킵 메시지 생성 | 거부/타임아웃 시 실행 |
 | `extract_actions` | 메시지에서 조치 정보 추출 | 백엔드 갱신 포함 |
-| `generate_report` | 보고서 생성 (PDF, DOCX, PPTX) | 템플릿 기반 |
+| `generate_report` | HTML 보고서 생성 | 템플릿 기반, UI에서 html2pdf.js로 PDF 다운로드 제공 |
 | `update_backend` | 백엔드에 보고서/조치 갱신 | API 호출 |
 
 #### 워크플로우 다이어그램
@@ -543,7 +511,7 @@ LangGraph 워크플로우를 빌드합니다.
 │                             │                                                       │
 │                             ▼                                                       │
 │                    ┌─────────────────┐                                              │
-│                    │ generate_report │  ← 보고서 생성 (PDF, DOCX, PPTX)             │
+│                    │ generate_report │  ← HTML 보고서 생성                           │
 │                    └────────┬────────┘                                              │
 │                             │                                                       │
 │                             ▼                                                       │
@@ -1154,15 +1122,7 @@ PATCH /internal/agent/events/{event_id}/analysis
   "type": "ASSAULT",
   "summary": "검은 후드티를 입은 중년 남성이...",
   "riskScore": "0.85",
-  "report": {
-    "content": "# 보고서 마크다운...",
-    "files": {
-      "pdf": "reports/{event_id}/report.pdf",
-      "docx": "reports/{event_id}/report.docx",
-      "pptx": "reports/{event_id}/report.pptx"
-    },
-    "generated_at": "2026-02-09T14:35:00"
-  },
+  "report": "<html>...HTML 보고서 문자열...</html>",
   "actions": [
     {
       "type": "emergency_call",
@@ -1369,7 +1329,7 @@ graph TD
 | `skip_emergency` | `nodes/check_approval.py` | 거부/타임아웃 시 스킵 메시지 |
 | `increment` | `nodes/agent.py` | 반복 횟수 증가 (최대 5회) |
 | `extract_actions` | `nodes/extract_actions.py` | 메시지에서 조치 정보 추출 |
-| `generate_report` | `nodes/generate_report.py` | 보고서 생성 (PDF, DOCX, PPTX) |
+| `generate_report` | `nodes/generate_report.py` | HTML 보고서 생성 |
 | `update_backend` | `nodes/update_backend.py` | 백엔드에 보고서/조치 갱신 |
 
 ---
@@ -1382,7 +1342,7 @@ graph TD
 
 | 파일 | 함수/클래스 | 상태 | 설명 |
 |------|-------------|------|------|
-| `services/report_generator.py` | `ReportGeneratorService` | ✅ 완료 | HTML, PDF, DOCX, PPTX 보고서 생성 |
+| `nodes/generate_report.py` | `generate_report_node` | ✅ 완료 | HTML 보고서 생성 (UI에서 PDF 다운로드 제공) |
 | `graph/subgraphs/response_agent.py` | `generate_report_node()` | ✅ 완료 | 보고서 생성 + Mock 서버 업로드 |
 | `tools/response_tools.py` | `execute_field_action()` | ⚠️ Mock | CCTV 방송/조명/PTZ/사이렌 제어 (Mock 응답) |
 | `tools/response_tools.py` | `emergency_call()` | ⚠️ Mock | 112/119 신고 시스템 연동 (Mock 응답) |

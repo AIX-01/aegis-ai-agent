@@ -37,7 +37,8 @@ class FrameProducer(threading.Thread):
         config: Config,
         frame_callback,
         shutdown_event: threading.Event,
-        source_streams_dict: Optional[Dict] = None # 스트림 정보 공유용
+        source_streams_dict: Optional[Dict] = None, # 스트림 정보 공유용
+        efs_writer=None,  # EFS 패킷 덤프 (ingest 모드용)
     ):
         """
         프레임 프로듀서 초기화
@@ -48,6 +49,7 @@ class FrameProducer(threading.Thread):
             frame_callback: 분석용 프레임 콜백 (camera_info, frame_data, timestamp)
             shutdown_event: 종료 시그널
             source_streams_dict: 스트림 정보를 등록할 딕셔너리
+            efs_writer: EFSPacketWriter 인스턴스 (ingest 모드에서만 사용)
         """
         super().__init__(daemon=True)
         self.camera_info = camera_info
@@ -61,16 +63,21 @@ class FrameProducer(threading.Thread):
         self.logger = logging.getLogger(f"aegis-agent.producer.{self.camera_id}")
 
         self.source_streams_dict = source_streams_dict
+        self.efs_writer = efs_writer
 
         # PyAV 컨테이너
         self.container = None
-        
+
         # 패킷 버퍼 초기화 (30초 저장)
         self.packet_buffer = PacketBuffer(buffer_duration=config.video_buffer_seconds)
 
         self.reconnect_attempt = 0
         self.total_packets_received = 0
         self.total_frames_decoded = 0
+
+        # EFS 덤프 주기 (5초마다)
+        self._last_efs_dump_time = 0
+        self._efs_dump_interval = 5.0
 
         self.is_local_file = self._is_local_file(self.rtsp_url)
         if self.is_local_file:
@@ -201,6 +208,16 @@ class FrameProducer(threading.Thread):
                     packet_copy.is_keyframe = packet.is_keyframe
                     self.packet_buffer.add_packet(packet_copy)
                     self.total_packets_received += 1
+
+                    # ==========================================
+                    # 경로 B-2: EFS 덤프 (ingest 모드만)
+                    # ==========================================
+                    if self.efs_writer and self.config.agent_mode != "all":
+                        now_efs = time.time()
+                        if now_efs - self._last_efs_dump_time >= self._efs_dump_interval:
+                            source_info = self.source_streams_dict.get(self.camera_id) if self.source_streams_dict else None
+                            self.efs_writer.dump_buffer(self.camera_id, self.packet_buffer, source_info)
+                            self._last_efs_dump_time = now_efs
 
                     # ==========================================
                     # 경로 A: 디코딩 및 분석 (분석용)

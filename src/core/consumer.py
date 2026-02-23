@@ -24,13 +24,15 @@ class ConsumerPool:
         config,
         queue_manager,
         packet_buffers=None, # 카메라별 영상 패킷 버퍼
-        source_streams=None  # 카메라별 원본 RTSP 스트림 정보
+        source_streams=None, # 카메라별 원본 RTSP 스트림 정보
+        efs_reader=None,     # EFS 패킷 리더 (worker 모드용)
     ):
         """컨슈머 풀 초기화"""
         self.config = config
         self.queue_manager = queue_manager
         self.packet_buffers = packet_buffers if packet_buffers is not None else {}
         self.source_streams = source_streams if source_streams is not None else {}
+        self.efs_reader = efs_reader
         self.logger = logging.getLogger("aegis-agent.consumer")
 
         # 분석용 클라이언트 초기화
@@ -154,23 +156,34 @@ class ConsumerPool:
 
                     # [Step 2: 영상 클립(MP4) 생성 및 업로드]
                     try:
-                        buffer = self.packet_buffers.get(camera_id)
-                        source_stream = self.source_streams.get(camera_id)
+                        mp4_file = None
 
-                        if buffer and source_stream:
-                            # 최근 N초간의 패킷 추출 및 MP4 저장
-                            packets = buffer.get_full_buffer(clip_duration=self.config.video_buffer_seconds)
-                            mp4_file = mux_packets_to_mp4(packets, source_stream)
-                            
-                            if mp4_file and mp4_file.getbuffer().nbytes > 0:
-                                # 백엔드에서 제공하는 업로드 경로로 영상 전송
-                                upload_url = self.backend_client.get_clip_upload_url(event_id)
-                                if upload_url and self.backend_client.upload_clip(upload_url, mp4_file.getvalue()):
-                                    # 업로드 완료 보고
-                                    self.backend_client.confirm_event_clip(event_id)
-                                    worker_logger.info(f"[{camera_id}] 영상 클립 업로드 성공")
+                        if self.config.agent_mode == "all":
+                            # 로컬 모드: PacketBuffer에서 직접 추출 (기존 로직)
+                            buffer = self.packet_buffers.get(camera_id)
+                            source_stream = self.source_streams.get(camera_id)
+
+                            if buffer and source_stream:
+                                packets = buffer.get_full_buffer(clip_duration=self.config.video_buffer_seconds)
+                                mp4_file = mux_packets_to_mp4(packets, source_stream)
+                            else:
+                                worker_logger.warning(f"[{camera_id}] 영상 버퍼 정보를 찾을 수 없습니다.")
                         else:
-                            worker_logger.warning(f"[{camera_id}] 영상 버퍼 정보를 찾을 수 없습니다.")
+                            # AWS 모드: EFS에서 패킷 읽기 → muxing
+                            if self.efs_reader:
+                                mp4_file = self.efs_reader.read_and_mux(
+                                    camera_id, clip_duration=self.config.video_buffer_seconds
+                                )
+                            else:
+                                worker_logger.warning(f"[{camera_id}] EFS 리더가 설정되지 않았습니다.")
+
+                        if mp4_file and mp4_file.getbuffer().nbytes > 0:
+                            # 백엔드에서 제공하는 업로드 경로로 영상 전송
+                            upload_url = self.backend_client.get_clip_upload_url(event_id)
+                            if upload_url and self.backend_client.upload_clip(upload_url, mp4_file.getvalue()):
+                                # 업로드 완료 보고
+                                self.backend_client.confirm_event_clip(event_id)
+                                worker_logger.info(f"[{camera_id}] 영상 클립 업로드 성공")
 
                     except Exception as e:
                         worker_logger.error(f"[{camera_id}] 클립 처리 중 오류: {e}")
