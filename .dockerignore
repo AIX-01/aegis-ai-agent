@@ -1,0 +1,46 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment variables
+.env
+
+# Claude Code
+.claude/
+
+# Documentation (not needed at runtime)
+*.md
+
+# CI/CD
+.github/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+tmp/
+temp*.tmp
+
+# Mock data
+mock_reports/
+
+# Scripts (dev only)
+scripts/
