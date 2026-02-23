@@ -46,7 +46,7 @@ class AnalysisState(TypedDict):
     event_type: EventType              # [M/S] 이벤트 유형 (ASSAULT/BURGLARY/DUMP/SWOON/VANDALISM)
     summary: str                       # [M/S] 상황 요약 텍스트
     risk_score: float                  # [M/S] 위험 점수 (0.0 ~ 1.0)
-    report: Dict[str, Any]             # [S→M] 보고서 {content: str, files: {pdf, docx, pptx, hwp}, generated_at}
+    report: str                        # [S→M] HTML 보고서 문자열 (백엔드 report 필드로 전달)
 
     # =========================================
     # 메타 데이터
