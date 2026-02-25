@@ -205,6 +205,12 @@ class SQSQueueAdapter(QueueAdapter):
             elif hasattr(value, "isoformat"):
                 # datetime → ISO 문자열
                 sqs_task[key] = value.isoformat()
+            elif isinstance(value, list):
+                # 리스트 내 datetime 객체도 ISO 문자열로 변환
+                sqs_task[key] = [
+                    v.isoformat() if hasattr(v, "isoformat") else v
+                    for v in value
+                ]
             else:
                 sqs_task[key] = value
         return sqs_task
